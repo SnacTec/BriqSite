@@ -16,9 +16,9 @@
      briqsite-vX.XX.html is published — everything below reads from it,
      so there's only ever one place to change. -->
 <script>
-  var CURRENT_VERSION = '1.05';
+  var CURRENT_VERSION = '1.06';
   var TARGET = 'briqsite-v' + CURRENT_VERSION + '.html?v=' + CURRENT_VERSION;
-  // The query string (?v=1.05) is the actual cache-busting mechanism —
+  // The query string (?v=1.06) is the actual cache-busting mechanism —
   // combined with the version already being IN the filename, a browser
   // (or any CDN in front of it) sees this as a completely unseen URL
   // every single time the version changes, with no stale-cache path at
@@ -29,9 +29,9 @@
 </script>
 <!-- No-JS fallback: an ordinary meta refresh, plus a visible link in
      case even that's somehow blocked. -->
-<meta http-equiv="refresh" content="0; url=briqsite-v1.05.html?v=1.05">
+<meta http-equiv="refresh" content="0; url=briqsite-v1.06.html?v=1.06">
 </head>
 <body style="background:#0d0a06; color:#f3e8d2; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0;">
-  <p>Loading BriqSite… if nothing happens, <a href="briqsite-v1.05.html?v=1.05" style="color:#e7b781;">click here</a>.</p>
+  <p>Loading BriqSite… if nothing happens, <a href="briqsite-v1.06.html?v=1.06" style="color:#e7b781;">click here</a>.</p>
 </body>
 </html>

@@ -512,7 +512,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v1.00</div>
+  <div id="versionLabel">v1.02</div>
   <div id="lookLayer"></div>
   <div id="leftControlCluster">
     <div id="joyBase">
@@ -3503,6 +3503,7 @@ function triggerCrosshairSwing(kind) {
 function setTool(t) {
   tool = t;
   slabStart = null; roofStart = null; copyStart = null; // switching tools cancels any half-marked corner
+  clearDragRowPreview(); // ...and any in-progress build-row preview along with them
   document.getElementById('toolPlace').classList.toggle('active', t === 'place');
   document.getElementById('toolRemove').classList.toggle('active', t === 'remove');
   document.getElementById('toolPaint').classList.toggle('active', t === 'paint');
@@ -3831,6 +3832,7 @@ function stopRemoveArming() {
   actionBtnEl.style.setProperty('--remove-ring', '0deg');
 }
 function endAction() {
+  commitDragRow(); // no-op unless a build-mode axis-locked row drag is actually in progress
   actionHeld = false;
   holdSession = null;
   stopRemoveArming();
@@ -4370,7 +4372,11 @@ function updateAimAndGhost() {
       ghostMesh.position.set(c[0], c[1], c[2]);
       ghostMesh.rotation.y = orientation === 'z' ? Math.PI / 2 : 0;
       ghostMesh.material = check.ok ? ghostMatValid : ghostMatInvalid;
-      ghostMesh.visible = true;
+      // While an axis-locked row drag is actively showing its own
+      // multi-piece preview (see renderDragRowPreview), the single ghost
+      // would just overlap/clutter it — the row preview already covers
+      // every slot, including this one.
+      ghostMesh.visible = !(holdSession && holdSession.axis && holdSession.rowStart);
       currentAnchor = anchor;
       currentGhostValid = check.ok;
       currentInvalidReason = check.ok ? '' : check.reason;
@@ -5696,7 +5702,126 @@ function doRoofAction() {
 /* ---------------- Hold-to-repeat session state ---------------- */
 let holdSession = null;
 function startHoldSession() {
-  holdSession = { y: null, axis: null, fixedOther: null };
+  holdSession = { y: null, axis: null, fixedOther: null, rowStart: null, rowEndCoord: null };
+}
+
+// Tiles a straight span [coordLo, coordHi] (inclusive, along one locked
+// axis) with the type's available module sizes, biggest first — the
+// exact same "greedy, largest piece that still fits" approach the old
+// per-frame gap-filler already used, just applied to the WHOLE dragged
+// row in a single pass now, rather than reacting to each frame's own
+// jump. Used identically by the live ghost preview during a drag AND
+// the actual commit on release, so what's shown while dragging is
+// always exactly what release will build — never a surprise. A
+// sub-module remainder at the far end (the span left over is smaller
+// than even the smallest available piece) is simply left unfilled, same
+// as before: never force an oversized piece to overrun the row's end.
+function computeRowTiling(axisIdx, fixedOther, y, coordLo, coordHi, mt, orient, preferredLen) {
+  const crossCells = BRIQ_CATALOG[mt].crossCells;
+  const sizesDesc = Object.values(BRIQ_CATALOG[mt].sizes).map((s) => s.len).sort((a, b) => b - a);
+  // The player's own currently-selected size comes first — a normal
+  // drag should mostly repeat exactly what they picked (matching how a
+  // single held tap always placed exactly that size), not silently
+  // upgrade itself to whatever the largest available module happens to
+  // be. Other sizes are only ever a FALLBACK now: for a leftover
+  // remainder too short for the preferred size, or to route around an
+  // existing Briq the preferred size collides with.
+  const orderedSizes = preferredLen && sizesDesc.includes(preferredLen)
+    ? [preferredLen, ...sizesDesc.filter((s) => s !== preferredLen)]
+    : sizesDesc;
+  const slots = [];
+  let pos = coordLo, guard = 0;
+  while (pos <= coordHi && guard < 2000) {
+    guard++;
+    const remaining = coordHi - pos + 1;
+    const fittingSizes = orderedSizes.filter((s) => s <= remaining);
+    if (!fittingSizes.length) break; // remainder smaller than even the smallest module — leave it, never force an oversized piece to overrun the row
+    // Try every available size at THIS exact position, preferred size
+    // first, and use the first one that doesn't collide with anything
+    // already there. Only if EVERY size collides here does this fall
+    // back to marking just the SMALLEST fitting size as a blocked slot
+    // and stepping forward by only that much — never a larger size that
+    // was tried first. This is what keeps a small existing Briq from
+    // blowing a hole in the row bigger than the obstacle itself: a
+    // blocked candidate just means retrying other sizes at that same
+    // spot before giving up on it.
+    let picked = null;
+    for (const s of fittingSizes) {
+      const anchor = axisIdx === 0 ? [pos, y, fixedOther] : [fixedOther, y, pos];
+      const cells = cellsForBrick(anchor, s, crossCells, orient);
+      const fp = footprintOf(anchor, s, crossCells, orient);
+      if (isPlacementValid(cells, fp, mt).ok) { picked = { anchor, len: s, cells, fp, valid: true }; break; }
+    }
+    if (picked) {
+      slots.push(picked);
+      pos += picked.len;
+    } else {
+      // orderedSizes isn't strictly descending any more (the preferred
+      // size was moved to the front), so the smallest FITTING size has
+      // to come from the original descending list, not just the last
+      // element of fittingSizes.
+      const smallestFitting = sizesDesc.filter((sz) => sz <= remaining).pop();
+      const s = smallestFitting;
+      const anchor = axisIdx === 0 ? [pos, y, fixedOther] : [fixedOther, y, pos];
+      const cells = cellsForBrick(anchor, s, crossCells, orient);
+      const fp = footprintOf(anchor, s, crossCells, orient);
+      slots.push({ anchor, len: s, cells, fp, valid: false });
+      pos += s;
+    }
+  }
+  return slots;
+}
+// The live multi-piece preview shown WHILE dragging a build row — one
+// ghost box per slot computeRowTiling would actually place, green where
+// it would succeed and red wherever an existing Briq is in the way (so
+// exactly what's about to be skipped is visible before committing, not
+// just guessed at). Rebuilt fresh each frame the row's extent changes;
+// cheap enough since a dragged row is at most a few dozen pieces.
+let dragRowPreviewGroup = null;
+function clearDragRowPreview() {
+  if (dragRowPreviewGroup) { scene.remove(dragRowPreviewGroup); dragRowPreviewGroup = null; }
+}
+function renderDragRowPreview(slots, mt, orient) {
+  clearDragRowPreview();
+  if (!slots.length) return;
+  dragRowPreviewGroup = new THREE.Group();
+  for (const slot of slots) {
+    const mesh = new THREE.Mesh(getBrickGeo(mt, slot.len), slot.valid ? ghostMatValid : ghostMatInvalid);
+    const c = brickCenterWorld(slot.fp);
+    mesh.position.set(c[0], c[1], c[2]);
+    mesh.rotation.y = orient === 'z' ? Math.PI / 2 : 0;
+    dragRowPreviewGroup.add(mesh);
+  }
+  scene.add(dragRowPreviewGroup);
+}
+// Fires once, on RELEASE — commits the whole dragged row in one pass
+// using the exact same tiling the preview just showed, batches every
+// piece it actually placed into a SINGLE undo step (undo removes the
+// entire row at once, not one piece at a time), and plays the place
+// sound/records stats only once for the row as a whole rather than per
+// piece. A slot blocked by an existing Briq is simply skipped — the
+// rest of the row is still built around it, exactly like the old
+// per-frame gap-filler already did for a fast jump, just resolved for
+// the complete row now instead of only the skipped stretch.
+function commitDragRow() {
+  clearDragRowPreview();
+  if (!holdSession || !holdSession.axis || !holdSession.rowStart) return;
+  const axisIdx = holdSession.axis === 'x' ? 0 : 2;
+  const startCoord = holdSession.rowStart[axisIdx];
+  const endCoord = holdSession.rowEndCoord;
+  const coordLo = Math.min(startCoord, endCoord);
+  const coordHi = Math.max(startCoord, endCoord) + brickLen - 1;
+  const slots = computeRowTiling(axisIdx, holdSession.fixedOther, holdSession.y, coordLo, coordHi, mainType, holdSession.axis, brickLen);
+  const placedIds = [];
+  for (const slot of slots) {
+    if (!slot.valid) continue;
+    if (placeBrick(slot.anchor, slot.len, holdSession.axis, mainType, studded)) placedIds.push(nextBrickId - 1);
+  }
+  if (placedIds.length) {
+    pushUndo(() => { for (const id of placedIds) removeBrickById(id); });
+    playPlaceSound(holdSession.y === 0);
+    recordBriqsPlaced(placedIds.length);
+  }
 }
 
 function doAction() {
@@ -5710,91 +5835,71 @@ function doAction() {
     const anchor = currentAnchor.slice();
     if (holdSession) {
       if (holdSession.y === null) {
-        // First placement of the hold — this is what actually commits
-        // the course/row; require the normal validity check here only.
+        // First press of the hold — this is what locks in the course
+        // (and, for a piece with a real length direction, the axis and
+        // row start). It no longer places anything itself: a build row
+        // is only ever committed on RELEASE now (commitDragRow), once
+        // the whole dragged span is known, so a fast drag gets tiled
+        // for the ENTIRE row in one go instead of reacted to frame by
+        // frame — see computeRowTiling's own comment for why.
         if (!currentGhostValid) return;
         holdSession.y = anchor[1];
         const crossCells = BRIQ_CATALOG[mainType].crossCells;
         if (brickLen > crossCells) {
           // A piece with a real length direction: only that axis may
           // vary for the rest of this hold. A cube (length == cross-
-          // section) has no such preferred direction, so no lock at all.
+          // section) has no such preferred direction, so no lock at
+          // all — and no deferred row either, it just places at once,
+          // exactly as it always has (a dragged cube has no "gap" to
+          // resolve in the first place).
           holdSession.axis = orientation;
           holdSession.fixedOther = orientation === 'x' ? anchor[2] : anchor[0];
+          holdSession.rowStart = anchor.slice();
+          const axisIdx = orientation === 'x' ? 0 : 2;
+          holdSession.rowEndCoord = anchor[axisIdx];
+          renderDragRowPreview(
+            computeRowTiling(axisIdx, holdSession.fixedOther, holdSession.y, anchor[axisIdx], anchor[axisIdx] + brickLen - 1, mainType, orientation, brickLen),
+            mainType, orientation,
+          );
+          return;
         }
+      } else if (holdSession.axis) {
+        // A held repeat, axis-locked: just extend how far the row's
+        // tracked end reaches and refresh the live multi-piece preview
+        // — nothing is actually placed yet (see commitDragRow, fired on
+        // release), so this can safely re-derive the FULL span's tiling
+        // fresh every frame without worrying about double-placing or
+        // undo-ordering.
+        anchor[1] = holdSession.y;
+        anchor[holdSession.axis === 'x' ? 2 : 0] = holdSession.fixedOther;
+        const axisIdx = holdSession.axis === 'x' ? 0 : 2;
+        holdSession.rowEndCoord = anchor[axisIdx];
+        const startCoord = holdSession.rowStart[axisIdx];
+        const coordLo = Math.min(startCoord, holdSession.rowEndCoord);
+        const coordHi = Math.max(startCoord, holdSession.rowEndCoord) + brickLen - 1;
+        renderDragRowPreview(
+          computeRowTiling(axisIdx, holdSession.fixedOther, holdSession.y, coordLo, coordHi, mainType, holdSession.axis, brickLen),
+          mainType, holdSession.axis,
+        );
+        return;
       } else {
-        // A held repeat: force the SAME course regardless of what the
-        // raw aim currently resolves to. Without this, so much as
-        // grazing the ground beside the wall while walking (instead of
-        // the brick's own top face) resets Y to 0 and the repeat would
-        // otherwise silently stop working on any course above the
-        // first — re-validate fresh afterwards rather than trusting
-        // currentGhostValid, since that was computed for the raw,
-        // unlocked aim.
+        // A held repeat, but a CUBE (never axis-locked) — same
+        // unconstrained-course-only handling as always, placing
+        // immediately below like a plain unheld tap would.
         anchor[1] = holdSession.y;
       }
-      if (holdSession.axis === 'x') anchor[2] = holdSession.fixedOther;
-      else if (holdSession.axis === 'z') anchor[0] = holdSession.fixedOther;
     } else if (!currentGhostValid) {
       return;
     }
+    // Reached only for a plain tap (no hold session at all — e.g. the F
+    // key) or a cube (which never defers to a row commit): place
+    // immediately, exactly as this always worked.
     const crossCells = BRIQ_CATALOG[mainType].crossCells;
-    // A held drag doesn't sample every possible position — only wherever
-    // the crosshair happens to be each animate() frame. Walking (or even
-    // just looking) fast enough moves the aim by more than one brick's
-    // length between two frames, and without this, the piece would only
-    // ever land at the NEW spot, leaving the skipped stretch as a gap in
-    // the wall. Once a length axis is locked, filling that stretch is a
-    // straight line: step back from the current spot toward the last
-    // spot actually placed, one brick-length at a time, placing each one
-    // exactly like the player had held still there — same validity
-    // check, same undo tracking, so a gap-filled run undoes one piece at
-    // a time just like a deliberate one would.
-    if (holdSession && holdSession.axis && holdSession.lastAnchor) {
-      const axisIdx = holdSession.axis === 'x' ? 0 : 2;
-      const last = holdSession.lastAnchor[axisIdx];
-      const cur = anchor[axisIdx];
-      const dir = cur > last ? 1 : -1;
-      // The stretch to fill is EXCLUSIVELY between the last piece's far
-      // end and the new piece's own near end — never touching either,
-      // so the piece the player is actually aiming at this frame always
-      // gets to land exactly where aimed, never rejected for colliding
-      // with a gap-filler that overran it. The gap is rarely an exact
-      // multiple of the current piece's own length (a fast movement
-      // lands wherever it lands), so it's tiled greedily with the
-      // largest available size of the current type that still fits at
-      // each step — the same "biggest piece first" approach used
-      // elsewhere (Platte fills, the villa generator) — falling back to
-      // smaller sizes only where the remaining stretch needs them.
-      const gapLo = dir > 0 ? last + brickLen : cur + brickLen;
-      const gapHi = dir > 0 ? cur - 1 : last - 1;
-      if (gapLo <= gapHi) {
-        const sizesDesc = Object.values(BRIQ_CATALOG[mainType].sizes).map(s => s.len).sort((a, b) => b - a);
-        let guard = 0;
-        let pos = gapLo;
-        while (pos <= gapHi && guard < 500) {
-          guard++;
-          const remaining = gapHi - pos + 1;
-          const pieceLen = sizesDesc.find(s => s <= remaining);
-          if (!pieceLen) break; // remainder smaller than even the smallest module for this type — leave it, never force an oversized piece in and risk overlapping the piece the player is actually aiming at
-          const midAnchor = anchor.slice();
-          midAnchor[axisIdx] = pos;
-          const midCells = cellsForBrick(midAnchor, pieceLen, crossCells, orientation);
-          const midFp = footprintOf(midAnchor, pieceLen, crossCells, orientation);
-          if (isPlacementValid(midCells, midFp, mainType).ok) {
-            placeBrickWithUndo(midAnchor, pieceLen, orientation, mainType, studded);
-          }
-          pos += pieceLen;
-        }
-      }
-    }
     const cells = cellsForBrick(anchor, brickLen, crossCells, orientation);
     const fp = footprintOf(anchor, brickLen, crossCells, orientation);
     const finalValidity = isPlacementValid(cells, fp, mainType);
     if (finalValidity.ok) {
-      if (placeBrickWithUndo(anchor, brickLen, orientation, mainType, studded) && holdSession) {
-        holdSession.lastAnchor = anchor.slice();
-      }
+      placeBrickWithUndo(anchor, brickLen, orientation, mainType, studded);
     }
   } else {
     if (!currentTargetCell) return;

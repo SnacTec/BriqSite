@@ -99,7 +99,7 @@
     position:absolute; top:calc(12px + env(safe-area-inset-top)); right:12px; z-index:15;
     display:flex; align-items:center; gap:6px;
   }
-  #undoBtn, #shareBtn, #fullscreenBtn, #infoBtn, #menuBtn{
+  #undoBtn, #achievementsBtn, #shareBtn, #fullscreenBtn, #infoBtn, #menuBtn{
     font-size:18px; font-weight:700;
     color:var(--parchment); background:rgba(32,24,15,.82); border:1px solid rgba(201,138,75,.5);
     border-radius:9px; width:38px; height:38px; cursor:pointer; box-shadow:var(--shadow);
@@ -233,6 +233,8 @@
   }
   .btn small{font-size:9px; color:var(--parchment-dim); font-weight:500;}
   .btn:active{transform:scale(.93);}
+  .btn[disabled]{opacity:.45; cursor:not-allowed; filter:grayscale(.4);}
+  .btn[disabled]:active{transform:none;}
   /* The bottom build panel specifically gets a bit shorter — only the
      vertical padding shrinks, so the icon glyphs themselves stay full
      size and just as easy to tap, they just sit in a slimmer button. */
@@ -452,6 +454,33 @@
     font-size:15px; cursor:pointer; padding:6px; line-height:1;
   }
   .slot-empty{font-size:12px; color:var(--parchment-dim); text-align:center; padding:16px 0;}
+  /* Achievement rows reuse the same look as a save-slot row (icon +
+     name + secondary line), just with a lock/checkmark on the right
+     instead of a delete button, and a dimmed, greyscale look while
+     still locked so unlocked ones visibly stand out. */
+  .achievement-row{
+    display:flex; align-items:center; gap:10px; padding:9px 10px;
+    background:rgba(0,0,0,.22); border:1px solid rgba(201,138,75,.25); border-radius:8px; margin-bottom:6px;
+  }
+  .achievement-row.locked{opacity:.5; filter:grayscale(.6);}
+  .achievement-row .achievement-icon{font-size:22px; flex-shrink:0; width:28px; text-align:center;}
+  .achievement-row .achievement-info{flex:1; min-width:0;}
+  .achievement-row .achievement-title{font-size:13px; color:var(--parchment); font-weight:700;}
+  .achievement-row .achievement-desc{font-size:11px; color:var(--parchment-dim); margin-top:1px;}
+  .achievement-row .achievement-status{font-size:16px; flex-shrink:0;}
+  /* A brief top-centre banner when something unlocks — auto-hides
+     itself, no click needed. */
+  #achievementToast{
+    position:absolute; top:calc(12px + env(safe-area-inset-top)); left:50%;
+    transform:translateX(-50%) translateY(-12px); z-index:30;
+    background:rgba(32,24,15,.96); border:1px solid var(--oak-light); border-radius:10px;
+    padding:10px 16px; box-shadow:var(--shadow); display:flex; align-items:center; gap:10px;
+    opacity:0; pointer-events:none; transition: opacity .25s ease, transform .25s ease;
+    max-width:min(320px, calc(100vw - 24px));
+  }
+  #achievementToast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  #achievementToastIcon{font-size:26px;}
+  #achievementToastTitle{font-size:13px; font-weight:700; color:var(--parchment);}
 
   #madeByTag{
     position:absolute; top:calc(4px + env(safe-area-inset-top)); left:50%; z-index:14;
@@ -494,7 +523,7 @@
       <button class="btn active" data-type="WS25" data-studded="true">WS25mZ</button>
       <button class="btn" data-type="WS25" data-studded="false">WS25oZ</button>
       <button class="btn" id="platteBtn" data-type="PLATTE">Platte</button>
-      <button class="btn" id="dachBtn" data-type="DACH">Dach</button>
+      <button class="btn" id="dachBtn" data-type="DACH" disabled title="Coming soon">Dach<small>(coming soon)</small></button>
     </div>
   </div>
   <div id="colorPanel">
@@ -517,6 +546,7 @@
 
   <div id="topRightRow">
     <button id="undoBtn" title="Undo last action">↩</button>
+    <button id="achievementsBtn" title="Achievements">🏆</button>
     <button id="shareBtn" title="Share a screenshot">📷</button>
     <button id="fullscreenBtn" title="Fullscreen">⛶</button>
     <button id="infoBtn" title="Info">ℹ</button>
@@ -550,8 +580,8 @@
     </div>
     <div class="group-label" style="margin-top:10px;">View</div>
     <div class="group">
-      <button class="btn wide" id="viewToggle">🐦 Bird's-eye<small>Switch</small></button>
-      <button class="btn active" id="gridToggleBtn">▦<small>Grid</small></button>
+      <button class="btn wide" id="viewToggle" disabled title="Coming soon">🐦 Bird's-eye<small>(coming soon)</small></button>
+      <button class="btn" id="gridToggleBtn">▦<small>Grid</small></button>
     </div>
     <div class="group-label" style="margin-top:10px;">Day / Night</div>
     <div class="group" style="align-items:center; flex-wrap:nowrap;">
@@ -731,6 +761,27 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="achievementsModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-scroll">
+        <h2>🏆 Achievements</h2>
+        <div class="sub" id="achievementsProgress">0 / 0 unlocked</div>
+        <div id="achievementsList"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="cta ghost" id="achievementsCloseBtn" style="width:100%;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="achievementToast" style="display:none;">
+    <span id="achievementToastIcon"></span>
+    <div>
+      <div class="sub" style="margin:0; color:var(--oak-light);">Achievement unlocked!</div>
+      <div id="achievementToastTitle"></div>
+    </div>
+  </div>
+
   <div class="modal-bg" id="saveSlotModal" style="display:none;">
     <div class="modal">
       <div class="modal-scroll">
@@ -804,6 +855,52 @@ function setControlMode(v) {
   try { localStorage.setItem(CONTROL_MODE_KEY, controlMode); } catch (e) { /* best-effort — a failed save here just means it won't be remembered next visit */ }
   setMode(mode); // re-applies joystick/look-layer visibility etc. for the newly-effective mode, without needing a page reload
 }
+
+// Achievement/stats STATE declared here (rather than down in the
+// Achievements section where the rest of that system actually lives) —
+// same reason as activeDecorLights above: setEnvironment() is called
+// once at boot, right after the ENVIRONMENTS block further down, and it
+// now calls recordEnvVisit(), which needs `stats` to already exist by
+// then. The functions that use these (unlockAchievement,
+// recordBriqsPlaced, recordEnvVisit, ...) stay defined in their normal
+// place — function declarations are hoisted regardless of position, it's
+// only these variables' VALUES that need to exist this early.
+const ACHIEVEMENTS_KEY = 'briqsite_achievements_v1';
+let unlockedAchievements = {}; // id -> unix ms timestamp
+try {
+  const savedA = JSON.parse(localStorage.getItem(ACHIEVEMENTS_KEY) || '{}');
+  if (savedA && typeof savedA === 'object') unlockedAchievements = savedA;
+} catch (e) { /* localStorage unavailable — nothing unlocks persistently this session, but nothing throws either */ }
+const ACHIEVEMENTS = {
+  first_briq: { icon: '🧱', title: 'First Briq', desc: 'Place your very first Briq.' },
+  briqs_100: { icon: '🏗️', title: 'Getting Started', desc: 'Place 100 Briqs in total.' },
+  briqs_500: { icon: '🏠', title: 'Builder', desc: 'Place 500 Briqs in total.' },
+  briqs_1000: { icon: '🏛️', title: 'Master Builder', desc: 'Place 1000 Briqs in total.' },
+  first_platte: { icon: '⬜', title: 'Flat Out', desc: 'Place your first Platte.' },
+  first_deko: { icon: '🌳', title: 'Nice Touch', desc: 'Place your first Deko object.' },
+  first_remove: { icon: '🗑️', title: 'Oops, Fixed It', desc: 'Remove a Briq or Deko object.' },
+  first_recolour: { icon: '🎨', title: 'A Splash of Colour', desc: 'Recolour a Briq.' },
+  first_copy: { icon: '📋', title: 'Copy That', desc: 'Copy and paste a group of Briqs.' },
+  first_rotate: { icon: '🔄', title: 'Turn It Up', desc: 'Rotate something.' },
+  first_undo: { icon: '↩️', title: 'Second Thoughts', desc: 'Undo an action.' },
+  world_traveler: { icon: '🌍', title: 'World Traveler', desc: 'Visit all four environments.' },
+  night_owl: { icon: '🌙', title: 'Night Owl', desc: 'Turn the Day/Night slider all the way to night.' },
+  lit_up: { icon: '🕯️', title: 'Lights On', desc: 'Place a lamppost, torch, fireplace, or floor lamp.' },
+  shared: { icon: '📤', title: 'Sharing is Caring', desc: 'Share a screenshot or your build.' },
+  qr_scanned: { icon: '📱', title: 'Scan Me', desc: 'Open the QR code.' },
+  first_save: { icon: '💾', title: 'Saved for Later', desc: 'Save your game to this browser.' },
+  parts_list: { icon: '🧾', title: 'Inventory Check', desc: 'Open the Parts List.' },
+  resized: { icon: '📏', title: 'Size Matters', desc: 'Resize a Deko object.' },
+};
+const STATS_KEY = 'briqsite_stats_v1';
+let stats = { totalBriqsPlaced: 0, visitedEnvs: [] };
+try {
+  const savedS = JSON.parse(localStorage.getItem(STATS_KEY) || 'null');
+  if (savedS && typeof savedS === 'object') {
+    stats.totalBriqsPlaced = savedS.totalBriqsPlaced || 0;
+    stats.visitedEnvs = Array.isArray(savedS.visitedEnvs) ? savedS.visitedEnvs : [];
+  }
+} catch (e) { /* stays at the zeroed default */ }
 
 /* ---------------- Renderer / Scene / Camera ---------------- */
 const canvas = document.getElementById('scene');
@@ -933,6 +1030,7 @@ function applyDayNight(t) {
   hemiLight.intensity = 0.12 + 0.82 * dayNightT;
   sun.intensity = 0.03 + 1.18 * dayNightT;
   applyAllDecorLightIntensities();
+  if (dayNightT <= 0.01) unlockAchievement('night_owl');
 }
 document.getElementById('dayNightSlider').addEventListener('input', (e) => {
   applyDayNight(Number(e.target.value) / 100);
@@ -1368,6 +1466,7 @@ function setEnvironment(key, savedLayout) {
   const env = ENVIRONMENTS[key];
   if (!env) return;
   currentEnv = key;
+  recordEnvVisit(key);
   applyDayNight(dayNightT); // re-derives this environment's own day/night sky from the current slider position
   groundMat.map = env.ground();
   groundMat.needsUpdate = true;
@@ -3410,6 +3509,7 @@ function setTool(t) {
 // or an ordinary Briq) as clicking the button would, not just the
 // single Briq-orientation case.
 function performRotateAction() {
+  unlockAchievement('first_rotate');
   if (tool === 'copy') {
     rotateClipboard90();
   } else if (editMode === 'deko') {
@@ -3574,8 +3674,12 @@ function setMode(m) {
   document.getElementById('lookLayer').style.display = (m === 'fp' && touchUI) ? 'block' : 'none';
   if (m !== 'fp') { joyPointerId = null; lookPointerId = null; resetJoyKnob(); flyUp = false; flyDown = false; }
   const vt = document.getElementById('viewToggle');
+  // The button itself is disabled (bird's-eye/orbit isn't ready yet —
+  // see the "coming soon" label on it), so this branch can only ever be
+  // reached via mode already being 'fp' at boot; the label always stays
+  // the same "coming soon" text rather than toggling with mode.
+  vt.innerHTML = '🐦 Bird\'s-eye<small>(coming soon)</small>';
   if (m === 'fp') {
-    vt.innerHTML = '🐦 Bird\'s-eye<small>tap to switch</small>';
     try {
       const az = orbitControls.getAzimuthalAngle();
       yaw = az + Math.PI;
@@ -3583,7 +3687,6 @@ function setMode(m) {
       playerPos.set(orbitControls.target.x, eyeHeight, orbitControls.target.z);
     } catch (e) {}
   } else {
-    vt.innerHTML = '🚶 First-person<small>tap to switch</small>';
     orbitControls.target.set(playerPos.x - Math.sin(yaw) * 0.8, 0.4, playerPos.z - Math.cos(yaw) * 0.8);
     camera.position.set(playerPos.x + 1.3, playerPos.y + 1.1, playerPos.z + 1.4);
     orbitControls.update();
@@ -3592,7 +3695,11 @@ function setMode(m) {
 document.getElementById('viewToggle').addEventListener('click', () => setMode(mode === 'fp' ? 'orbit' : 'fp'));
 document.getElementById('gridToggleBtn').addEventListener('click', () => {
   grid.visible = !grid.visible;
-  document.getElementById('gridToggleBtn').classList.toggle('active', !grid.visible);
+  // Active (orange) now means "grid IS on" — it was backwards before
+  // (orange while the grid was OFF), both here and in the button's
+  // initial class in the HTML, which is why it looked inverted at boot
+  // too, not just after a click.
+  document.getElementById('gridToggleBtn').classList.toggle('active', grid.visible);
 });
 setMode(mode);
 
@@ -4098,7 +4205,7 @@ function pushUndo(fn) {
 }
 function undoLast() {
   const fn = undoStack.pop();
-  if (fn) fn();
+  if (fn) { fn(); unlockAchievement('first_undo'); }
 }
 function placeBrickWithUndo(anchor, lengthCells, orientation, mt, studdedVal, force, colorVal) {
   const ok = placeBrick(anchor, lengthCells, orientation, mt, studdedVal, force, colorVal);
@@ -4106,6 +4213,7 @@ function placeBrickWithUndo(anchor, lengthCells, orientation, mt, studdedVal, fo
     const placedId = nextBrickId - 1;
     pushUndo(() => removeBrickAt(bricks.get(placedId).cells[0]));
     playPlaceSound(anchor[1] === 0);
+    recordBriqsPlaced(1);
   }
   return ok;
 }
@@ -4117,6 +4225,7 @@ function removeBrickWithUndo(cellArr) {
     const captured = captureBrickForUndo(removedBrick);
     pushUndo(() => restoreBrickFromCapture(captured));
     playRemoveSound();
+    unlockAchievement('first_remove');
   }
   return ok;
 }
@@ -4128,7 +4237,7 @@ function removeBrickWithUndo(cellArr) {
 // the same way a Platte fill does — one press, one undo step, however
 // many pieces it actually cleared.
 function removeAreaAt(targetCell, gridCells) {
-  if (gridCells <= 1) return removeBrickWithUndo(targetCell) ? 1 : 0; // removeBrickWithUndo plays its own sound
+  if (gridCells <= 1) return removeBrickWithUndo(targetCell) ? 1 : 0; // removeBrickWithUndo plays its own sound and handles its own achievement
   const [tx, ty, tz] = targetCell;
   const half = Math.floor(gridCells / 2);
   const xMin = tx - half, xMax = tx + (gridCells - half - 1);
@@ -4151,12 +4260,18 @@ function removeAreaAt(targetCell, gridCells) {
   if (removedData.length) {
     pushUndo(() => { for (const d of removedData) restoreBrickFromCapture(d); });
     playRemoveSound();
+    unlockAchievement('first_remove');
   }
   return removedData.length;
 }
 function doSlabFillWithUndo(x0, x1, z0, z1, y, mt, colorVal) {
   const id = placeSlabBlock(x0, x1, y, z0, z1, mt, colorVal, false);
-  if (id !== null) { pushUndo(() => removeBrickAt(bricks.get(id).cells[0])); playPlaceSound(y === 0); }
+  if (id !== null) {
+    pushUndo(() => removeBrickAt(bricks.get(id).cells[0]));
+    playPlaceSound(y === 0);
+    recordBriqsPlaced(1);
+    unlockAchievement('first_platte');
+  }
   return id !== null ? 1 : 0;
 }
 
@@ -4189,6 +4304,7 @@ function doPaintAction() {
   b.mesh.traverse((child) => { if (child.isMesh) child.material = newMat; });
   b.color = newColor;
   triggerCrosshairSwing('paint');
+  unlockAchievement('first_recolour');
   pushUndo(() => {
     const revertMat = getMat(oldColor);
     b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
@@ -4199,11 +4315,15 @@ function doPaintAction() {
 function doDecorAction() {
   if (tool === 'place') {
     if (currentDecorPos && !currentDecorPos.blocked) {
-      const ok = addDecor(decorType, currentDecorPos.x, currentDecorPos.z, decorRotation, currentDecorPos.y, false, decorSizeByType[decorType] || 1);
+      const size = decorSizeByType[decorType] || 1;
+      const ok = addDecor(decorType, currentDecorPos.x, currentDecorPos.z, decorRotation, currentDecorPos.y, false, size);
       if (ok) {
         const added = placedDecor[placedDecor.length - 1];
         pushUndo(() => removeDecorAt(added.mesh));
         playPlaceSound(!currentDecorPos.y);
+        unlockAchievement('first_deko');
+        if (LIT_DECOR_TYPES[decorType]) unlockAchievement('lit_up');
+        if (size !== 1) unlockAchievement('resized');
       }
     }
   } else if (currentDecorRemoveTarget) {
@@ -4212,6 +4332,7 @@ function doDecorAction() {
     pushUndo(() => addDecor(type, x, z, rotY, y, true, scale));
     playRemoveSound();
     triggerCrosshairSwing('remove');
+    unlockAchievement('first_remove');
   }
 }
 
@@ -4795,7 +4916,7 @@ function renderPartsList() {
   totalRow.textContent = `Total: ${bom.totalPieces} pieces`;
   body.appendChild(totalRow);
 }
-function openPartsListModal() { renderPartsList(); document.getElementById('partsListModal').style.display = 'flex'; }
+function openPartsListModal() { renderPartsList(); document.getElementById('partsListModal').style.display = 'flex'; unlockAchievement('parts_list'); }
 function closePartsListModal() { document.getElementById('partsListModal').style.display = 'none'; }
 document.getElementById('partsListBtn').addEventListener('click', openPartsListModal);
 document.getElementById('partsListCloseBtn').addEventListener('click', closePartsListModal);
@@ -4966,6 +5087,98 @@ function playBreakSound() {
 function playRemoveSound() { playBreakSound(); }
 function setSoundEnabled(v) { soundEnabled = !!v; }
 
+/* ---------------- Achievements ---------------- */
+// Persisted per-BROWSER (localStorage), same as the control-mode
+// preference and everything else in this section — deliberately never
+// part of the save file itself. An achievement is about what THIS
+// player has done across all their time with the game, not a property
+// of any one build, so it shouldn't travel with an exported/imported
+// save the way the build itself does.
+function saveStats() {
+  try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch (e) { /* best-effort */ }
+}
+function unlockAchievement(id) {
+  if (!ACHIEVEMENTS[id] || unlockedAchievements[id]) return; // unknown id, or already unlocked — never re-fires
+  unlockedAchievements[id] = Date.now();
+  try { localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(unlockedAchievements)); } catch (e) { /* best-effort */ }
+  showAchievementToast(id);
+}
+function recordBriqsPlaced(n) {
+  if (!n) return;
+  stats.totalBriqsPlaced += n;
+  saveStats();
+  unlockAchievement('first_briq');
+  if (stats.totalBriqsPlaced >= 100) unlockAchievement('briqs_100');
+  if (stats.totalBriqsPlaced >= 500) unlockAchievement('briqs_500');
+  if (stats.totalBriqsPlaced >= 1000) unlockAchievement('briqs_1000');
+}
+function recordEnvVisit(key) {
+  if (!stats.visitedEnvs.includes(key)) { stats.visitedEnvs.push(key); saveStats(); }
+  if (stats.visitedEnvs.length >= 4) unlockAchievement('world_traveler');
+}
+let achievementToastTimer = null;
+function showAchievementToast(id) {
+  const def = ACHIEVEMENTS[id];
+  if (!def) return;
+  const toast = document.getElementById('achievementToast');
+  document.getElementById('achievementToastIcon').textContent = def.icon;
+  document.getElementById('achievementToastTitle').textContent = def.title;
+  toast.style.display = 'flex';
+  // A reflow between removing and re-adding "show" is what lets this
+  // restart properly if a second achievement unlocks while the first
+  // toast is still visible/fading — same restart trick used for the
+  // crosshair's own swing animation elsewhere in this file.
+  toast.classList.remove('show');
+  void toast.offsetWidth;
+  toast.classList.add('show');
+  clearTimeout(achievementToastTimer);
+  achievementToastTimer = setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => { toast.style.display = 'none'; }, 260);
+  }, 3200);
+}
+function renderAchievementsList() {
+  const list = document.getElementById('achievementsList');
+  list.innerHTML = '';
+  const ids = Object.keys(ACHIEVEMENTS);
+  let unlockedCount = 0;
+  for (const id of ids) {
+    const def = ACHIEVEMENTS[id];
+    const unlockedAt = unlockedAchievements[id];
+    if (unlockedAt) unlockedCount++;
+    const row = document.createElement('div');
+    row.className = 'achievement-row' + (unlockedAt ? '' : ' locked');
+    const icon = document.createElement('div');
+    icon.className = 'achievement-icon';
+    icon.textContent = def.icon;
+    const info = document.createElement('div');
+    info.className = 'achievement-info';
+    const title = document.createElement('div');
+    title.className = 'achievement-title';
+    title.textContent = def.title;
+    const desc = document.createElement('div');
+    desc.className = 'achievement-desc';
+    desc.textContent = unlockedAt ? def.desc : '\ud83d\udd12 ' + def.desc;
+    info.appendChild(title); info.appendChild(desc);
+    const status = document.createElement('div');
+    status.className = 'achievement-status';
+    status.textContent = unlockedAt ? '\u2705' : '\ud83d\udd12';
+    row.appendChild(icon); row.appendChild(info); row.appendChild(status);
+    list.appendChild(row);
+  }
+  document.getElementById('achievementsProgress').textContent = `${unlockedCount} / ${ids.length} unlocked`;
+}
+function openAchievementsModal() {
+  renderAchievementsList();
+  document.getElementById('achievementsModal').style.display = 'flex';
+}
+function closeAchievementsModal() { document.getElementById('achievementsModal').style.display = 'none'; }
+document.getElementById('achievementsBtn').addEventListener('click', openAchievementsModal);
+document.getElementById('achievementsCloseBtn').addEventListener('click', closeAchievementsModal);
+document.getElementById('achievementsModal').addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'achievementsModal') closeAchievementsModal();
+});
+
 /* ---------------- Settings (sound, look sensitivity, field of view) ---------------- */
 let lookSensitivity = 1; // multiplier applied on top of the base look-speed constants
 function setLookSensitivity(v) { lookSensitivity = v; }
@@ -5077,7 +5290,7 @@ function renderQrCode() {
     }
   }
 }
-function openQrModal() { renderQrCode(); document.getElementById('qrModal').style.display = 'flex'; }
+function openQrModal() { renderQrCode(); document.getElementById('qrModal').style.display = 'flex'; unlockAchievement('qr_scanned'); }
 function closeQrModal() { document.getElementById('qrModal').style.display = 'none'; }
 document.getElementById('qrBtn').addEventListener('click', openQrModal);
 document.getElementById('qrCloseBtn').addEventListener('click', closeQrModal);
@@ -5217,6 +5430,8 @@ function pasteClipboardAt(tx, tz) {
   if (placedIds.length > 0) {
     pushUndo(() => { for (const id of placedIds) removeBrickById(id); });
     playPlaceSound(false); // pasting a whole group reads as snapping a prefab piece into place, not a single heavy drop
+    recordBriqsPlaced(placedIds.length);
+    unlockAchievement('first_copy');
   }
   return placedIds.length;
 }
@@ -5871,6 +6086,7 @@ async function shareExport() {
         files: [file], title: 'BriqSite',
         text: `My BriqSite build \u2014 open it in the game with Import! ${GAME_URL}`,
       });
+      unlockAchievement('shared');
       closeExportModal();
       return;
     } catch (e) {
@@ -5981,6 +6197,7 @@ function saveNamedSlot(name) {
     slots.push({ id: genSlotId(), name, ts: Date.now(), data: state });
   }
   writeSaveSlots(slots);
+  unlockAchievement('first_save');
   return slots;
 }
 function deleteSaveSlot(id) {
@@ -6183,6 +6400,7 @@ async function shareScreenshot() {
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title: 'BriqSite', text: shareText });
+      unlockAchievement('shared');
       return;
     } catch (e) {
       if (e && e.name === 'AbortError') return; // the player cancelled the share sheet themselves

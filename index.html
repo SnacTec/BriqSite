@@ -289,6 +289,16 @@
   #buildPanel.collapsed .rows{display:none;}
   #buildPanel.collapsed{padding-bottom:2px;}
 
+  /* Small, unobtrusive build/version marker — sits just below the
+     action button's own corner, dim enough to stay out of the way of
+     actual gameplay but always there for reference (e.g. when reporting
+     a bug, or checking that a new build actually loaded). */
+  #versionLabel{
+    position:absolute; right:8px; bottom:calc(4px + env(safe-area-inset-bottom)); z-index:8;
+    font-family:'JetBrains Mono', monospace; font-size:10px; color:rgba(243,232,210,.35);
+    pointer-events:none; user-select:none;
+  }
+
   /* The action button is pinned to the bottom-right corner independent of
      the dock's flex flow, so it always stays visible & reachable no
      matter how wide the build panel gets (e.g. WS25 with 4 sizes). */
@@ -502,6 +512,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
+  <div id="versionLabel">v1.00</div>
   <div id="lookLayer"></div>
   <div id="leftControlCluster">
     <div id="joyBase">

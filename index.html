@@ -691,6 +691,14 @@
         <h2>⚙️ Settings</h2>
         <div class="sub">Sound, look controls, and field of view.</div>
         <div class="settings-row">
+          <span class="settings-label">Controls</span>
+          <div class="group" id="controlModeGroup" style="gap:4px;">
+            <button class="btn" data-control-mode="auto">Auto</button>
+            <button class="btn" data-control-mode="touch">📱 Phone</button>
+            <button class="btn" data-control-mode="desktop">🖥️ PC</button>
+          </div>
+        </div>
+        <div class="settings-row">
           <span class="settings-label">Sound effects</span>
           <button class="btn active" id="soundToggleBtn">🔊<small>On</small></button>
         </div>
@@ -770,6 +778,32 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
    ============================================================ */
 
 const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+
+/* ---------------- Control mode (Auto / Smartphone / PC) ---------------- */
+// Device touch CAPABILITY (isTouch, above) isn't the same as which
+// controls the player actually wants to use right now — a touchscreen
+// laptop reports touch support but is normally driven with a mouse and
+// keyboard, which is exactly the case this override exists for. This is
+// a per-BROWSER preference (localStorage), deliberately never part of
+// the save file itself: exporting a build from a desktop shouldn't force
+// touch controls (or vice versa) on whoever imports it on a different
+// kind of device — the build is the same either way, only how you drive
+// the camera around it differs.
+const CONTROL_MODE_KEY = 'briqsite_control_mode_v1';
+let controlMode = 'auto'; // 'auto' | 'touch' | 'desktop'
+try {
+  const savedControlMode = localStorage.getItem(CONTROL_MODE_KEY);
+  if (savedControlMode === 'touch' || savedControlMode === 'desktop' || savedControlMode === 'auto') controlMode = savedControlMode;
+} catch (e) { /* localStorage unavailable — stay on the 'auto' default */ }
+// The single source of truth every touch-vs-desktop control branch below
+// reads from here on, instead of the raw isTouch capability check.
+let touchUI = controlMode === 'auto' ? isTouch : controlMode === 'touch';
+function setControlMode(v) {
+  controlMode = v;
+  touchUI = controlMode === 'auto' ? isTouch : controlMode === 'touch';
+  try { localStorage.setItem(CONTROL_MODE_KEY, controlMode); } catch (e) { /* best-effort — a failed save here just means it won't be remembered next visit */ }
+  setMode(mode); // re-applies joystick/look-layer visibility etc. for the newly-effective mode, without needing a page reload
+}
 
 /* ---------------- Renderer / Scene / Camera ---------------- */
 const canvas = document.getElementById('scene');
@@ -3370,7 +3404,12 @@ function setTool(t) {
   updateBriqControlsVisibility();
   updateCrosshairIcon();
 }
-document.getElementById('rotateBtn').addEventListener('click', () => {
+// The one shared rotate action — used by the Rotate button's own click,
+// AND by both the Tab and R keyboard shortcuts below, so a keyboard
+// player gets the exact same behaviour in every mode (Copy, Deko, Dach,
+// or an ordinary Briq) as clicking the button would, not just the
+// single Briq-orientation case.
+function performRotateAction() {
   if (tool === 'copy') {
     rotateClipboard90();
   } else if (editMode === 'deko') {
@@ -3389,7 +3428,8 @@ document.getElementById('rotateBtn').addEventListener('click', () => {
   } else {
     orientation = orientation === 'x' ? 'z' : 'x';
   }
-});
+}
+document.getElementById('rotateBtn').addEventListener('click', performRotateAction);
 
 /* ---------------- Mobile joystick (movement) — Pointer Events, own fixed hit-zone ---------------- */
 const joyBase = document.getElementById('joyBase');
@@ -3523,9 +3563,15 @@ function focusOn([fx, fz]) {
 function setMode(m) {
   mode = m;
   orbitControls.enabled = (m === 'orbit');
-  document.getElementById('crosshair').classList.toggle('hidden', m === 'orbit');
-  document.getElementById('leftControlCluster').style.display = (m === 'fp' && isTouch) ? 'flex' : 'none';
-  document.getElementById('lookLayer').style.display = (m === 'fp' && isTouch) ? 'block' : 'none';
+  // The crosshair marks a FIXED screen-centre aim point — meaningless
+  // once aiming instead follows the actual mouse cursor (orbit mode,
+  // always; fp mode, on desktop as of the change above), so it now
+  // stays hidden any time touchUI is off, on top of the original
+  // orbit-mode case. Smartphone (touchUI) behaviour is untouched: still
+  // hidden in orbit, still shown in fp, exactly as before.
+  document.getElementById('crosshair').classList.toggle('hidden', m === 'orbit' || !touchUI);
+  document.getElementById('leftControlCluster').style.display = (m === 'fp' && touchUI) ? 'flex' : 'none';
+  document.getElementById('lookLayer').style.display = (m === 'fp' && touchUI) ? 'block' : 'none';
   if (m !== 'fp') { joyPointerId = null; lookPointerId = null; resetJoyKnob(); flyUp = false; flyDown = false; }
   const vt = document.getElementById('viewToggle');
   if (m === 'fp') {
@@ -3576,23 +3622,54 @@ if (isIOS && !isStandalone) {
   document.getElementById('fullscreenBtn').style.display = 'none';
 }
 
-/* ---------------- Pointer aim tracking (orbit mode) ---------------- */
+/* ---------------- Pointer aim tracking (orbit mode, and desktop fp) ---------------- */
+// The Egoperspektive normally aims from dead-centre of the screen (the
+// crosshair) — fine for touch, where there's no persistent cursor to
+// speak of. On desktop, though, a building game should let the mouse
+// cursor itself point at what's about to be placed (exactly like it
+// already works in bird's-eye/orbit view), not force turning the whole
+// camera just to nudge the aim a little. So this now also tracks the
+// cursor in fp mode, but ONLY when touchUI is off — smartphone controls
+// keep aiming from the crosshair exactly as before, completely
+// unaffected by any of this.
 const aimNDC = new THREE.Vector2(0, 0);
 canvas.addEventListener('pointermove', (e) => {
-  if (mode !== 'orbit') return;
-  const r = canvas.getBoundingClientRect();
-  aimNDC.x = ((e.clientX - r.left) / r.width) * 2 - 1;
-  aimNDC.y = -((e.clientY - r.top) / r.height) * 2 + 1;
-});
-
-/* ---------------- Desktop mouse-look (pointer lock) ---------------- */
-canvas.addEventListener('click', () => {
-  if (mode === 'fp' && !isTouch && document.pointerLockElement !== canvas) {
-    canvas.requestPointerLock();
+  if (mode === 'orbit' || (mode === 'fp' && !touchUI)) {
+    const r = canvas.getBoundingClientRect();
+    aimNDC.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+    aimNDC.y = -((e.clientY - r.top) / r.height) * 2 + 1;
   }
 });
+
+/* ---------------- Desktop mouse-look (right-drag, no pointer lock) ----------------
+   Pointer lock (the previous approach) hides the cursor entirely while
+   active, which meant there was NO way to click any menu/panel/button
+   without first pressing Escape to release it, clicking, then clicking
+   back into the scene to resume looking around — workable for a plain
+   shooter with barely any UI, genuinely clunky for a building game with
+   this many panels. Holding the RIGHT button and dragging to look
+   instead keeps the cursor visible and normal the entire time, so every
+   menu/panel stays one plain click away — the same trade-off (a single
+   drag is bounded by the screen edge, so a full turn is drag-release-
+   drag-again rather than one endless sweep) most browser-based 3D
+   tools/map viewers already use, and it costs nothing extra: regular
+   (non-locked) mousemove events already report the same movementX/
+   movementY deltas pointer lock did, so the yaw/pitch math is unchanged
+   — only what GATES it (right button held, instead of "is locked") is
+   different. Deliberately untouched by any of this: touch/smartphone
+   controls, which never used pointer lock or the mouse at all. */
+let rightMouseDown = false;
+canvas.addEventListener('contextmenu', (e) => {
+  if (mode === 'fp' && !touchUI) e.preventDefault(); // the right button is "look", not a context menu, in this mode
+});
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 2 && mode === 'fp' && !touchUI) rightMouseDown = true;
+});
+document.addEventListener('mouseup', (e) => {
+  if (e.button === 2) rightMouseDown = false;
+});
 document.addEventListener('mousemove', (e) => {
-  if (mode === 'fp' && document.pointerLockElement === canvas) {
+  if (mode === 'fp' && !touchUI && rightMouseDown) {
     yaw -= e.movementX * 0.0022 * lookSensitivity;
     pitch -= e.movementY * 0.0022 * lookSensitivity;
     pitch = Math.max(-1.35, Math.min(1.35, pitch));
@@ -3604,7 +3681,7 @@ const keys = {};
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'KeyF' || e.code === 'Enter') { e.preventDefault(); doAction(); }
-  if (e.code === 'KeyR') { orientation = orientation === 'x' ? 'z' : 'x'; }
+  if (e.code === 'KeyR' || e.code === 'Tab') { e.preventDefault(); performRotateAction(); }
   if (e.code === 'KeyQ') { mainType = mainType === 'WS20' ? 'WS25' : 'WS20'; if (!BRIQ_CATALOG[mainType].sizes[sizeKey]) sizeKey = Object.keys(BRIQ_CATALOG[mainType].sizes)[0]; applyType(); }
   if (e.code === 'KeyZ') { studded = !studded; applyType(); }
 });
@@ -3640,8 +3717,10 @@ function endAction() {
   holdSession = null;
   stopRemoveArming();
 }
-actionBtnEl.addEventListener('pointerdown', (e) => {
-  actionBtnEl.setPointerCapture(e.pointerId);
+// Shared by the on-screen action button AND a real left mouse click
+// (below) — exactly the same build-once/remove-once-then-arm-to-repeat
+// logic either way, just two different input sources triggering it.
+function beginAction() {
   startHoldSession();
   if (tool === 'remove') {
     doAction(); // exactly one removal PASS (one Briq, or one whole grid-area batch), always, on the press itself
@@ -3662,10 +3741,35 @@ actionBtnEl.addEventListener('pointerdown', (e) => {
     actionHeld = true;
     doAction();
   }
+}
+actionBtnEl.addEventListener('pointerdown', (e) => {
+  actionBtnEl.setPointerCapture(e.pointerId);
+  beginAction();
   e.preventDefault();
 });
 actionBtnEl.addEventListener('pointerup', endAction);
 actionBtnEl.addEventListener('pointercancel', endAction);
+
+// Left mouse button does the SAME thing the round action button does
+// (build/remove, hold to repeat) — the ordinary "left-click builds" a PC
+// player expects from any first-person game. No pointer-lock gate
+// anymore (see the look-around comment above for why that approach was
+// dropped) — the cursor is always visible and normal now, so a left
+// click always means "build/remove right where I'm aiming", the moment
+// the player is actually in first-person view on desktop. Scoped to
+// desktop (!touchUI) so it can never doubly fire alongside the
+// on-screen action button's own touch handling, and to fp mode so it
+// never fights with OrbitControls' own left-drag-to-orbit.
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  if (mode !== 'fp' || touchUI) return;
+  beginAction();
+});
+document.addEventListener('mouseup', (e) => {
+  if (e.button !== 0) return;
+  if (mode !== 'fp' || touchUI) return;
+  endAction();
+});
 
 /* ---------------- Raycasting / ghost preview ---------------- */
 const raycaster = new THREE.Raycaster();
@@ -3686,7 +3790,7 @@ updateGhostGeometry();
 let lastLen = brickLen, lastOrient = orientation, lastTool = tool, lastMainType = mainType;
 
 function raycastAim() {
-  const ndc = mode === 'fp' ? { x: 0, y: 0 } : aimNDC;
+  const ndc = (mode === 'fp' && touchUI) ? { x: 0, y: 0 } : aimNDC;
   raycaster.setFromCamera(ndc, camera);
   // Remove and Recolour both target an EXISTING Briq directly, never bare
   // ground — Build is the only case that also needs the ground plane
@@ -3702,7 +3806,7 @@ function raycastAim() {
 // updateDecorAimAndGhost). This also means the ground stays a valid aim
 // target even with the Entfernen tool selected, unlike raycastAim above.
 function raycastGround() {
-  const ndc = mode === 'fp' ? { x: 0, y: 0 } : aimNDC;
+  const ndc = (mode === 'fp' && touchUI) ? { x: 0, y: 0 } : aimNDC;
   raycaster.setFromCamera(ndc, camera);
   const hits = raycaster.intersectObjects([ground], false);
   return hits[0] || null;
@@ -3711,7 +3815,7 @@ function raycastGround() {
 // terrace, a garden on a floor slab, ...) — but deliberately NOT on top
 // of an ordinary WS20/WS25 Briq, which stays reserved for building.
 function raycastGroundOrSlabTop() {
-  const ndc = mode === 'fp' ? { x: 0, y: 0 } : aimNDC;
+  const ndc = (mode === 'fp' && touchUI) ? { x: 0, y: 0 } : aimNDC;
   raycaster.setFromCamera(ndc, camera);
   const slabTargets = brickMeshes.filter((m) => {
     const b = bricks.get(m.userData.brickId);
@@ -4869,12 +4973,53 @@ function setCameraFov(v) {
   camera.fov = v;
   camera.updateProjectionMatrix();
 }
-function openSettingsModal() { document.getElementById('settingsModal').style.display = 'flex'; }
+// Bird's-eye/orbit already zooms with the mouse wheel automatically —
+// that's OrbitControls' own default behaviour (moving the camera closer/
+// further from its target, bounded by minDistance/maxDistance above).
+// First-person has no "orbit target" to dolly toward, so this moves the
+// PLAYER'S OWN POSITION instead, straight along whichever way the
+// camera is currently looking (pitch included, so looking down and
+// scrolling in walks you down-and-forward toward that spot, not just
+// horizontally) — a real position change, not a field-of-view trick
+// (which is what the first version of this did, and didn't feel like
+// an actual "get closer"). Bounded by the same world/height limits
+// ordinary movement and flying already respect. Scoped to fp + desktop
+// only: orbit mode already has its own wheel-zoom (adding this too
+// would just fight it), and smartphone (touchUI) never sees wheel
+// events from touch scrolling anyway — the explicit guard makes that
+// scoping intentional rather than assumed.
+const WHEEL_DOLLY_STEP = 0.6;
+canvas.addEventListener('wheel', (e) => {
+  if (mode !== 'fp' || touchUI) return;
+  e.preventDefault();
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const step = -Math.sign(e.deltaY) * WHEEL_DOLLY_STEP; // scroll up = move forward (closer), scroll down = move backward (further)
+  playerPos.addScaledVector(dir, step);
+  playerPos.x = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.x));
+  playerPos.z = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.z));
+  playerPos.y = Math.max(FLY_MIN_Y, Math.min(FLY_MAX_Y, playerPos.y));
+}, { passive: false });
+function openSettingsModal() {
+  renderControlModeButtons();
+  document.getElementById('settingsModal').style.display = 'flex';
+}
 function closeSettingsModal() { document.getElementById('settingsModal').style.display = 'none'; }
 document.getElementById('settingsBtn').addEventListener('click', openSettingsModal);
 document.getElementById('settingsCloseBtn').addEventListener('click', closeSettingsModal);
 document.getElementById('settingsModal').addEventListener('click', (e) => {
   if (e.target && e.target.id === 'settingsModal') closeSettingsModal();
+});
+function renderControlModeButtons() {
+  document.querySelectorAll('#controlModeGroup button[data-control-mode]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.controlMode === controlMode);
+  });
+}
+document.getElementById('controlModeGroup').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-control-mode]');
+  if (!btn) return;
+  setControlMode(btn.dataset.controlMode);
+  renderControlModeButtons();
 });
 document.getElementById('soundToggleBtn').addEventListener('click', () => {
   setSoundEnabled(!soundEnabled);
@@ -5479,7 +5624,7 @@ function animate() {
 
   if (mode === 'fp') {
     let ix = 0, iz = 0;
-    if (isTouch) {
+    if (touchUI) {
       ix = joyVec.x; iz = -joyVec.y;
     } else {
       if (keys['KeyW'] || keys['ArrowUp']) iz += 1;
@@ -5501,7 +5646,7 @@ function animate() {
     // roofs instead of being stuck at fixed eye height (Space/▲ up,
     // Shift/▼ down).
     let flyDir = 0;
-    if (isTouch) {
+    if (touchUI) {
       if (flyUp) flyDir += 1;
       if (flyDown) flyDir -= 1;
     } else {
@@ -5567,7 +5712,7 @@ function animate() {
 
 /* ---------------- Intro modal ---------------- */
 function fillIntro() {
-  document.getElementById('introText').textContent = isTouch
+  document.getElementById('introText').textContent = touchUI
     ? 'Tip: turn your phone sideways (landscape) to see more of the build area, and use the ⛶ button any time to go fullscreen. Tap the ℹ button for the full controls.'
     : 'Tip: use the ⛶ button or F11 for fullscreen. Click the ℹ button any time for the full controls.';
 }
@@ -5580,7 +5725,7 @@ function fillInfoControls() {
     row.innerHTML = `<span class="info-icon">${icon}</span><span class="info-text">${text}</span>`;
     container.appendChild(row);
   }
-  const rows = isTouch ? [
+  const rows = touchUI ? [
     ['🕹️', 'Slide left pad to walk'],
     ['▲▼', 'On the pad\u2019s edge: fly up/down'],
     ['👉', 'Drag right side of screen to look'],
@@ -5597,12 +5742,12 @@ function fillInfoControls() {
     ['☰', 'Menu: save, load, view, scenery, grid'],
   ] : [
     ['⌨️', 'W A S D to walk'],
-    ['🖱️', 'Mouse to look (click once to lock it)'],
+    ['🖱️', 'Right-click + drag to look \u00b7 Left-click to build/remove'],
     ['⎵ / ⇧', 'Space: fly up · Shift: fly down'],
     ['🧱', 'Top-left: pick Briq type (Q to cycle)'],
     ['🎨', 'Colour picker next to it'],
     ['1 / 2', 'Switch size'],
-    ['F', 'Build/Remove (hold to repeat) · R: rotate'],
+    ['🖱️/F', 'Left-click or F: Build/Remove (hold to repeat) \u00b7 Tab/R: rotate'],
     ['🌳', 'Top-left leaf: switch to Deco'],
     ['↩', 'Undo last action'],
     ['⛶', 'Fullscreen (F11)'],
@@ -5627,7 +5772,7 @@ fillIntro();
 fillInfoControls();
 document.getElementById('startBtn').addEventListener('click', () => {
   document.getElementById('introModal').style.display = 'none';
-  if (isTouch && !isIOS) toggleFullscreen(); // best-effort, ignored where unsupported
+  if (touchUI && !isIOS) toggleFullscreen(); // best-effort, ignored where unsupported
 });
 function closeAllPopups() {
   document.getElementById('typeMenuPanel').classList.remove('show');

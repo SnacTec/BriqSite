@@ -512,7 +512,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v1.02</div>
+  <div id="versionLabel">v1.05</div>
   <div id="lookLayer"></div>
   <div id="leftControlCluster">
     <div id="joyBase">
@@ -3795,6 +3795,50 @@ document.addEventListener('mousemove', (e) => {
   }
 });
 
+/* ---------------- Desktop middle-mouse pan (horizontal plane only) ----------------
+   Left-click builds, right-drag looks, the wheel dollies forward/back —
+   holding the MIDDLE button and dragging fills the one gap left: moving
+   around the horizontal plane without touching the keyboard at all,
+   which is what actually enables one-handed play on desktop (mouse
+   only, no WASD needed for basic repositioning). Deliberately its own
+   gesture rather than reusing right-drag: right-drag turns the CAMERA
+   in place, this instead MOVES the player sideways AND forward/back —
+   dragging right slides the world right under the cursor (so the
+   camera itself moves left, matching a "grab and drag" pan — the same
+   convention Google Maps, Photoshop's hand tool, etc. all use),
+   exactly like sliding yourself across the ground rather than
+   swivelling to look. Deliberately does NOT touch height (Y) at all —
+   that stays Space/Shift's job, same as ordinary WASD movement. Same
+   fp+desktop-only scoping as the look/zoom gestures above, and the same
+   world bounds ordinary WASD movement already respects. */
+const PAN_SPEED = 0.015; // metres moved per pixel of mouse drag
+let middleMouseDown = false;
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 1 && mode === 'fp' && !touchUI) {
+    middleMouseDown = true;
+    e.preventDefault(); // stops the browser's own middle-click autoscroll cursor from appearing
+  }
+});
+document.addEventListener('mouseup', (e) => {
+  if (e.button === 1) middleMouseDown = false;
+});
+document.addEventListener('mousemove', (e) => {
+  if (mode === 'fp' && !touchUI && middleMouseDown) {
+    const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+    // Inverted on both axes deliberately — this is the "grab the world
+    // and drag it" convention (Google Maps' hand tool, Photoshop's pan,
+    // etc.): dragging right visually slides the world right under the
+    // cursor, which means the CAMERA itself has to move left to produce
+    // that effect, and likewise dragging up slides the world up
+    // (camera moves back/away), not "drag right to walk right".
+    playerPos.addScaledVector(right, -e.movementX * PAN_SPEED);
+    playerPos.addScaledVector(forward, e.movementY * PAN_SPEED);
+    playerPos.x = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.x));
+    playerPos.z = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.z));
+  }
+});
+
 /* ---------------- Desktop keyboard movement ---------------- */
 const keys = {};
 window.addEventListener('keydown', (e) => {
@@ -6074,6 +6118,7 @@ function fillInfoControls() {
   ] : [
     ['⌨️', 'W A S D to walk'],
     ['🖱️', 'Right-click + drag to look \u00b7 Left-click to build/remove'],
+    ['🖱️', 'Middle-click + drag to move sideways/forward-back \u00b7 Wheel to zoom'],
     ['⎵ / ⇧', 'Space: fly up · Shift: fly down'],
     ['🧱', 'Top-left: pick Briq type (Q to cycle)'],
     ['🎨', 'Colour picker next to it'],

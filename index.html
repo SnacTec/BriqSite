@@ -850,7 +850,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v1.67</div>
+  <div id="versionLabel">v1.69</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -945,7 +945,6 @@
     </div>
     <div class="group-label" style="margin-top:10px;">View</div>
     <div class="group">
-      <button class="btn wide" id="viewToggle" disabled title="Coming soon">🐦 Bird's-eye<small>(coming soon)</small></button>
       <button class="btn" id="gridToggleBtn">▦<small>Grid</small></button>
     </div>
     <div class="group-label" style="margin-top:10px;">Day / Night</div>
@@ -1353,6 +1352,16 @@ const ACHIEVEMENTS = {
   parts_list: { icon: '🧾', title: 'Inventory Check', desc: 'Open the Parts List.' },
   resized: { icon: '📏', title: 'Size Matters', desc: 'Resize a Deko object.' },
   first_measure: { icon: '📐', title: 'Measure Twice', desc: 'Use the Measure tool to check a distance.' },
+  // Team-specific — each only ever shows up in (and is only unlockable
+  // by) the player's own chosen team's list, filtered in
+  // renderAchievementsList() below. Deliberately built on top of
+  // existing trigger points rather than new tracking of their own:
+  // completing a Level IS precision work by definition (rebuilding an
+  // exact given structure), and pasting a large captured group via Copy
+  // already reproduces something identically, many times over, in one
+  // action — mass production in miniature.
+  vke_precision: { icon: '🎯', title: 'Precision Work', desc: 'Complete a Level exactly to spec.' },
+  triqbriq_series: { icon: '🏭', title: 'Mass Production', desc: 'Paste a captured group of 10 or more Briqs in one go.' },
 };
 const STATS_KEY = 'briqsite_stats_v1';
 let stats = { totalBriqsPlaced: 0, visitedEnvs: [] };
@@ -4205,12 +4214,6 @@ function setMode(m) {
   document.getElementById('leftControlCluster').style.display = (m === 'fp' && touchUI) ? 'flex' : 'none';
   document.getElementById('lookLayer').style.display = (m === 'fp' && touchUI) ? 'block' : 'none';
   if (m !== 'fp') { joyPointerId = null; lookPointerId = null; resetJoyKnob(); flyUp = false; flyDown = false; }
-  const vt = document.getElementById('viewToggle');
-  // The button itself is disabled (bird's-eye/orbit isn't ready yet —
-  // see the "coming soon" label on it), so this branch can only ever be
-  // reached via mode already being 'fp' at boot; the label always stays
-  // the same "coming soon" text rather than toggling with mode.
-  vt.innerHTML = '🐦 Bird\'s-eye<small>(coming soon)</small>';
   if (m === 'fp') {
     try {
       const az = orbitControls.getAzimuthalAngle();
@@ -4224,7 +4227,6 @@ function setMode(m) {
     orbitControls.update();
   }
 }
-document.getElementById('viewToggle').addEventListener('click', () => setMode(mode === 'fp' ? 'orbit' : 'fp'));
 document.getElementById('gridToggleBtn').addEventListener('click', () => {
   grid.visible = !grid.visible;
   // Active (orange) now means "grid IS on" — it was backwards before
@@ -5860,7 +5862,16 @@ function showAchievementToast(id) {
 function renderAchievementsList() {
   const list = document.getElementById('achievementsList');
   list.innerHTML = '';
-  const ids = Object.keys(ACHIEVEMENTS);
+  // Team-specific achievements only ever appear in (and are only ever
+  // unlockable by) the matching team's own list — showing the OTHER
+  // team's achievement here would just be a permanently-locked entry
+  // the player can literally never earn, which reads as broken/unfair
+  // rather than as a nice team touch.
+  const TEAM_ACHIEVEMENT_OWNER = { vke_precision: 'vke', triqbriq_series: 'triqbriq' };
+  const ids = Object.keys(ACHIEVEMENTS).filter((id) => {
+    const owner = TEAM_ACHIEVEMENT_OWNER[id];
+    return !owner || owner === selectedTeam;
+  });
   let unlockedCount = 0;
   for (const id of ids) {
     const def = ACHIEVEMENTS[id];
@@ -6084,6 +6095,7 @@ function checkLevelSlotReopen(cells) {
 function completeLevel() {
   levelStars[activeLevel.def.id] = true;
   saveLevelStars();
+  if (selectedTeam === 'vke') unlockAchievement('vke_precision');
   document.getElementById('levelCompleteTitle').textContent = activeLevel.def.name;
   const idx = LEVELS.findIndex((l) => l.id === activeLevel.def.id);
   document.getElementById('levelCompleteNextBtn').style.display = (idx >= 0 && idx < LEVELS.length - 1) ? '' : 'none';
@@ -6735,6 +6747,7 @@ function pasteClipboardAt(tx, tz) {
     playPlaceSound(false); // pasting a whole group reads as snapping a prefab piece into place, not a single heavy drop
     recordBriqsPlaced(placedIds.length);
     unlockAchievement('first_copy');
+    if (selectedTeam === 'triqbriq' && placedIds.length >= 10) unlockAchievement('triqbriq_series');
   }
   return placedIds.length;
 }

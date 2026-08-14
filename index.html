@@ -184,16 +184,24 @@
      would make the tip drift off-centre for the swing's duration and
      then snap back). */
   #crosshair.icon-remove{ transform:translate(-50%,-50%) translate(3px,3px); }
-  #crosshair.icon-paint{ font-size:27px; transform:translate(-50%,-50%) translate(3px,-4px) scaleX(1.35); }
+  /* The paintbrush's bristle tip sits well toward the bottom-left corner
+     of its own glyph box (most emoji sets draw the brush diagonally,
+     handle at the top-right) — a LARGER nudge than the pick's, since the
+     brush's tip sits noticeably further from its own box's centre than
+     the pick's point does. The actual paint-covered TIP of the bristles
+     sits further along than where the bristles meet the handle/ferrule
+     — an earlier (7px,-8px) landed on that ferrule join instead of the
+     tip itself, so this pushes further in the same up-right direction. */
+  #crosshair.icon-paint{ font-size:27px; transform:translate(-50%,-50%) translate(15px,-16px) scaleX(1.35); }
   @keyframes crosshairSwingRemove{
     0%{transform:translate(-50%,-50%) translate(3px,3px) rotate(0deg);}
     40%{transform:translate(-50%,-50%) translate(3px,3px) rotate(-32deg) translate(-2px,-3px);}
     100%{transform:translate(-50%,-50%) translate(3px,3px) rotate(0deg);}
   }
   @keyframes crosshairSwingPaint{
-    0%{transform:translate(-50%,-50%) translate(3px,-4px) scaleX(1.35) translateY(0) rotate(0deg);}
-    45%{transform:translate(-50%,-50%) translate(3px,-4px) scaleX(1.35) translateY(4px) rotate(-12deg);}
-    100%{transform:translate(-50%,-50%) translate(3px,-4px) scaleX(1.35) translateY(0) rotate(0deg);}
+    0%{transform:translate(-50%,-50%) translate(15px,-16px) scaleX(1.35) translateY(0) rotate(0deg);}
+    45%{transform:translate(-50%,-50%) translate(15px,-16px) scaleX(1.35) translateY(4px) rotate(-12deg);}
+    100%{transform:translate(-50%,-50%) translate(15px,-16px) scaleX(1.35) translateY(0) rotate(0deg);}
   }
   #crosshair.anim-remove{ animation: crosshairSwingRemove .2s ease-out; }
   #crosshair.anim-paint{ animation: crosshairSwingPaint .18s ease-out; }
@@ -842,7 +850,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v1.64</div>
+  <div id="versionLabel">v1.67</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons

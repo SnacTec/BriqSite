@@ -48,7 +48,7 @@
     position:absolute; top:calc(12px + env(safe-area-inset-top)); left:12px; z-index:15;
     display:flex; align-items:stretch; gap:6px;
   }
-  #typeMenuBtn, #modeToggleBtn, #colorBtn{
+  #typeMenuBtn, #modeToggleBtn{
     font-family:'JetBrains Mono', monospace; font-weight:700; font-size:13px;
     color:var(--oak-light); background:rgba(32,24,15,.82); border:1px solid rgba(201,138,75,.5);
     border-radius:9px; padding:0 12px; cursor:pointer; box-shadow:var(--shadow);
@@ -57,13 +57,11 @@
   }
   #modeToggleBtn{color:var(--parchment); font-weight:700;}
   #modeToggleBtn small{font-size:10px; color:inherit; font-weight:700;}
-  #modeToggleBtn.active{background:var(--oak); color:var(--ink); border-color:var(--oak-light);}
-  #colorBtn{padding:0 9px;}
-  #colorSwatchDot{
-    width:18px; height:18px; border-radius:50%; display:block;
-    background:linear-gradient(135deg, #c98a4b, #8a5a34);
-    border:1px solid rgba(255,255,255,.4);
-  }
+  /* modeToggleBtn deliberately has no .active styling of its own — its
+     label/icon already flip between "Deco"/leaf and "Briqs"/trowel, so
+     a separate highlighted-active look would contradict that (a
+     button labelled "Briqs" while highlighted as if you're already in
+     Briq mode). */
   #typeMenuPanel{
     position:absolute; top:calc(56px + env(safe-area-inset-top)); left:12px; z-index:15;
     background:rgba(32,24,15,.9); border:1px solid rgba(201,138,75,.5); border-radius:10px;
@@ -211,12 +209,12 @@
        controls rendering UNDER a translucent joystick circle (unreadable
        text, buttons that look clipped by the circle's outline) is worse
        than the joystick itself being briefly covered in that same
-       overlap area. The "Menu" handle below is the actual fix for
-       this — collapsing the panel removes the overlap entirely — this
-       z-index is just the fallback for whenever it's left expanded. */
+       overlap area. This z-index at least keeps the panel's own
+       controls fully legible and usable in that overlap case. */
     z-index:13; pointer-events:none;
   }
   .panel{
+    position:relative;
     pointer-events:auto;
     background:rgba(32,24,15,.82);
     border:1px solid rgba(201,138,75,.4);
@@ -225,6 +223,51 @@
     box-shadow: var(--shadow);
     backdrop-filter: blur(3px);
   }
+  /* The build/Deko panel's own collapse toggle — genuinely INSIDE
+     #buildPanel now (not a separate sibling element trying to visually
+     fake being part of it), so it automatically shares the exact same
+     background/border/radius/shadow as the panel itself; there's no
+     colour or rounding to keep in sync by hand any more, because it's
+     the same box. No border/background of its own at all — just the
+     arrow glyph, sitting on the panel's own surface.
+
+     #buildPanel switches to a ROW layout (was column) with two items
+     side by side: `.rows` (all the actual tool content, taking up the
+     remaining space) and this button (fixed-size, never shrinking).
+
+     COLLAPSED: `.rows` hides, leaving the toggle as the ONLY content —
+     the panel then naturally shrinks to wrap snugly around just that
+     button (min-height/padding reduced for this state specifically),
+     becoming a small standalone card with its own tighter corner
+     radius, all through the same normal box, not a different one.
+
+     Bounded (max-width) so it can never push the action button
+     off-screen — its "Größe" buttons wrap onto a second line instead
+     of growing wider. Everything panel-wide lives in this ONE rule —
+     a duplicate #buildPanel{} selector further down the stylesheet
+     once shipped by accident and silently overrode parts of this via
+     its own shorthand `padding`, so it's important this stays the only
+     one. */
+  #buildPanel{
+    display:flex; flex-direction:row; align-items:center; gap:2px;
+    max-width: calc(100vw - 108px);
+    padding:6px;
+    min-height:60px;
+  }
+  #buildPanel .rows{flex:1; min-width:0;}
+  #buildPanelToggleBtn{
+    flex-shrink:0; pointer-events:auto; cursor:pointer;
+    background:none; border:none; box-shadow:none; padding:6px 4px;
+    color:var(--parchment); font-size:15px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #buildPanel.collapsed{
+    min-height:0; padding:4px; border-radius:9px;
+  }
+  #buildPanel.collapsed #buildPanelToggleBtn{
+    width:30px; height:30px; padding:0; font-size:16px;
+  }
+  #buildPanel.collapsed .rows{display:none;}
   .btn{
     font-family:'JetBrains Mono', monospace; font-weight:700; font-size:11px;
     color:var(--parchment); background:var(--ink-2); border:1px solid rgba(201,138,75,.4);
@@ -233,9 +276,46 @@
     transition: transform .08s ease, background .15s ease;
   }
   .btn small{font-size:9px; color:var(--parchment-dim); font-weight:500;}
+  /* Tool buttons (Build/Remove/Recolour/Copy/Measure): icon only while
+     inactive, to save space — the label only appears on whichever one
+     is CURRENTLY active, so clicking through them one at a time still
+     shows what each one actually is, without every label competing for
+     room all at once. Without an explicit justify-content, a column
+     flex with only ONE visible child (no label) sits at the TOP of the
+     button rather than centred in it. Deliberately NOT overriding
+     padding here — #buildPanel .btn's own shared padding (below) is
+     exactly what keeps these the SAME height as the sub-function
+     buttons alongside them; a bigger icon font-size alone was already
+     enough to make these noticeably taller than intended, so this one
+     is kept modest rather than matching a full emoji's usual size.
+     Inactive ones are also narrower (a smaller min-width) — an icon
+     alone needs far less width than an icon-plus-word-label does, and
+     the saved space is exactly what's needed for a wider sub-function
+     area to sit comfortably alongside them. */
+  #toolGroup .btn{justify-content:center; font-size:15px; min-width:34px; height:40px; overflow:hidden;}
+  #toolGroup .btn.active{font-size:14px; min-width:44px;}
+  #toolGroup .btn small{display:none;}
+  #toolGroup .btn.active small{display:block;}
+  /* Explicitly matching the SAME fixed height as the tool buttons above
+     — both groups sit side by side in the same row, so a mismatch there
+     is immediately obvious even though their own content differs
+     (icon-only vs icon-plus-word-label). A plain min-height isn't
+     enough on its own: it only sets a FLOOR, so if one side's natural
+     content (e.g. an emoji glyph, which often renders taller than its
+     own nominal font-size suggests) happens to need MORE room than
+     that floor, it still ends up taller than the other side, which
+     is exactly what kept happening here. An explicit height on BOTH
+     groups forces them to genuinely match regardless of what either
+     one's own content would naturally want. */
+  #briqGroupSize .btn, #removeGridGroup .btn, #roofMaterialGroup .btn, #copyGroup .btn, #paintGroup .btn{height:40px; overflow:hidden;}
   .btn:active{transform:scale(.93);}
   .btn[disabled]{opacity:.45; cursor:not-allowed; filter:grayscale(.4);}
   .btn[disabled]:active{transform:none;}
+  /* Generic fallback for the top-bar/tool buttons the tutorial disables,
+     which aren't part of the .btn family above (their own per-id rules
+     don't include a [disabled] look of their own) — same treatment,
+     just scoped broadly enough to reach any plain <button> anywhere. */
+  button[disabled]{opacity:.4; cursor:not-allowed; filter:grayscale(.5);}
   /* The bottom build panel specifically gets a bit shorter — only the
      vertical padding shrinks, so the icon glyphs themselves stay full
      size and just as easy to tap, they just sit in a slimmer button. */
@@ -250,6 +330,20 @@
   #decorCategoryGroup{flex-wrap:nowrap; gap:4px;}
   #decorCategoryGroup .btn{min-width:0; flex:1; padding:6px 2px; font-size:15px;}
   #decorCategoryGroup .btn small{display:none;}
+  /* Individual Deko item buttons (Lamppost/Torch/etc): icon only, no
+     text label any more — every icon in DECOR_ICONS is deliberately
+     unique across the whole catalogue so this is never ambiguous. Only
+     size-variant items keep a tiny one-letter badge (S/M/L) under the
+     icon, using the SAME small-label styling .btn already has for that
+     purpose elsewhere. */
+  #decorTypeGroup .btn{min-width:0; flex:0 0 auto; padding:7px 8px; font-size:20px; justify-content:center;}
+  /* Prev/Next now sit directly beside the type icons (in the SAME row)
+     instead of on their own separate row underneath — narrow arrow
+     tabs rather than full-size buttons, since that's the one whole row
+     of vertical space this saves back for a Deko-mode Build panel that
+     was otherwise noticeably taller than every other tool's own panel. */
+  #decorPrevBtn, #decorNextBtn{min-width:0; padding:7px 6px; font-size:13px;}
+  #decorTypeGroup .btn small{font-size:8px;}
   /* The size popup floats above the whole palette (not one specific
      button — "above the actual selection field", simple and always in
      the same predictable spot regardless of which button was
@@ -267,29 +361,25 @@
   .settings-row input[type="range"]{flex:1; max-width:130px; accent-color:var(--oak); margin-left:10px;}
   .group-label{font-size:9px; color:var(--parchment-dim); text-align:center; margin-bottom:4px; letter-spacing:.5px; text-transform:uppercase;}
 
-  /* Bounded so it can never push the action button off-screen — its
-     "Größe" buttons wrap onto a second line instead of growing wider. */
-  #buildPanel{
-    display:flex; flex-direction:column;
-    max-width: calc(100vw - 108px);
-    padding:6px;
+  /* Tools always on the left, whichever sub-function group is
+     currently relevant (size/grid/roof-material/copy-status/colour/
+     Deko type) on the right — #subFunctionGroup holds ALL of those as
+     children, only one ever visible at a time, so this only ever needs
+     to push TWO things (#toolGroup and #subFunctionGroup) to opposite
+     ends. Falls back to wrapping (sub-functions dropping to their own
+     line below the tools) only if a screen is too narrow to fit both
+     side by side. */
+  #buildPanel .rows{display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;}
+  #subFunctionGroup{display:flex; justify-content:flex-end; flex:1; min-width:0;}
+  #colorSwatchDotInline{
+    width:20px; height:20px; border-radius:50%; display:block;
+    background:linear-gradient(135deg, #c98a4b, #8a5a34); border:1px solid rgba(255,255,255,.4);
   }
-  #buildPanel .rows{display:flex; gap:10px; flex-wrap:wrap;}
+  /* No text label any more (icon alone, same as the tool buttons) —
+     needs its own justify-content since a column flex with only ONE
+     visible child otherwise sits at the top rather than centred. */
+  #paintGroup .btn{justify-content:center;}
   #subTypeGroup{max-width: min(320px, calc(100vw - 220px));}
-  /* A persistent "grab handle" for the whole build/Deko panel — never
-     itself hidden, so there's always something to tap to bring the rest
-     back. Collapsing it is the real fix for the panel growing tall
-     enough to reach into the move-joystick's zone (see #dock's z-index
-     comment): with everything below the handle hidden, there's nothing
-     left to overlap at all. */
-  #buildPanelToggleBtn{
-    width:100%; background:none; border:none; color:var(--parchment-dim);
-    font-family:'JetBrains Mono', monospace; font-weight:700; font-size:10px; letter-spacing:.5px;
-    padding:1px 0 6px; cursor:pointer; text-align:center;
-  }
-  #buildPanel.collapsed .rows{display:none;}
-  #buildPanel.collapsed{padding-bottom:2px;}
-
   /* Small, unobtrusive build/version marker — sits just below the
      action button's own corner, dim enough to stay out of the way of
      actual gameplay but always there for reference (e.g. when reporting
@@ -299,6 +389,40 @@
     font-family:'JetBrains Mono', monospace; font-size:10px; color:rgba(243,232,210,.35);
     pointer-events:none; user-select:none;
   }
+  /* The tutorial no longer dims the whole screen or tries to "lift" a
+     target above anything with z-index (that approach turned out
+     unreliable — a button nested inside a panel that itself sits in a
+     lower stacking context can't out-rank an overlay just by bumping
+     its own z-index, which is exactly what made a spotlighted Remove
+     button look highlighted but stay unclickable). Buttons that
+     shouldn't be used right now are disabled via the real `disabled`
+     attribute instead (see the general button[disabled] rule further
+     down) — a browser already refuses clicks on those on its own, no
+     custom logic needed. All that's left here is the pointing hand
+     itself, plus a slim one-line hint pill — deliberately no big text
+     box, since that's what used to eat into the 3D view on a phone. */
+  #tutorialHand{
+    position:fixed; z-index:27; font-size:30px; pointer-events:none;
+    transform:translate(-50%, -100%); animation: tutorialBob 1s ease-in-out infinite;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,.6));
+  }
+  @keyframes tutorialBob{
+    0%,100%{ transform:translate(-50%, -100%); }
+    50%{ transform:translate(-50%, -112%); }
+  }
+  #tutorialHint{
+    position:fixed; z-index:27; top:calc(10px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+    display:flex; align-items:center; gap:8px;
+    background:rgba(32,24,15,.97); border:1px solid var(--oak-light); border-radius:20px;
+    padding:7px 8px 7px 14px; box-shadow:var(--shadow);
+    max-width:min(340px, calc(100vw - 24px));
+  }
+  #tutorialHintText{font-size:12px; color:var(--parchment); line-height:1.3;}
+  #tutorialHint .btn, #tutorialHint button{
+    font-size:11px; padding:5px 10px; min-width:0; width:auto; flex-shrink:0;
+    background:var(--oak); color:var(--ink); border:none; border-radius:12px; cursor:pointer;
+  }
+  #tutorialSkipBtn{background:transparent !important; color:var(--parchment-dim) !important; text-decoration:underline;}
 
   /* The action button is pinned to the bottom-right corner independent of
      the dock's flex flow, so it always stays visible & reachable no
@@ -308,14 +432,21 @@
     pointer-events:auto;
     width:74px; height:74px; border-radius:50%;
     background: radial-gradient(circle at 35% 30%, var(--oak-light), var(--oak) 60%, var(--oak-dark));
+    background-clip:padding-box;
     border:3px solid rgba(255,255,255,.25);
     box-shadow: var(--shadow);
     color:var(--ink); font-family:'Fraunces',serif; font-weight:900; font-size:12px;
     display:flex; align-items:center; justify-content:center; text-align:center;
     cursor:pointer; flex-shrink:0; z-index:11;
+    /* Forces this circle onto its own GPU-composited layer — without
+       it, a border-radius:50% circle with a thick border and a
+       gradient fill can rasterize with a visibly faceted/stepped edge
+       on some GPUs/browsers instead of a properly anti-aliased curve.
+       This is the standard, well-established fix for exactly that. */
+    transform:translateZ(0); backface-visibility:hidden; -webkit-backface-visibility:hidden;
   }
   #actionBtn.remove{background:radial-gradient(circle at 35% 30%, var(--rust-light), var(--rust) 65%, #6f2c1c);}
-  #actionBtn:active{transform:scale(.92);}
+  #actionBtn:active{transform:translateZ(0) scale(.92);}
 
   /* The "hold to arm rapid removal" ring: a thin coloured arc that grows
      clockwise from 12 o'clock around the button as the player holds
@@ -326,8 +457,8 @@
   #actionBtn::after{
     content:''; position:absolute; inset:-6px; border-radius:50%;
     background:conic-gradient(var(--rust-light) var(--remove-ring, 0deg), transparent var(--remove-ring, 0deg));
-    -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 5px));
-    mask:radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 5px));
+    -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 4px));
+    mask:radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 4px));
     pointer-events:none; opacity:0; transition:opacity .1s;
   }
   #actionBtn.arming::after{opacity:1;}
@@ -340,13 +471,15 @@
     pointer-events:auto;
     width:50px; height:50px; border-radius:50%;
     background: radial-gradient(circle at 35% 30%, var(--oak-light), var(--oak) 65%, var(--oak-dark));
+    background-clip:padding-box;
     border:3px solid rgba(255,255,255,.22);
     box-shadow: var(--shadow);
     color:var(--ink); font-weight:900; font-size:24px;
     display:flex; align-items:center; justify-content:center;
     cursor:pointer;
+    transform:translateZ(0); backface-visibility:hidden; -webkit-backface-visibility:hidden;
   }
-  #rotateBtn:active{transform:scale(.92);}
+  #rotateBtn:active{transform:translateZ(0) scale(.92);}
 
   #aimHint{
     position:absolute; left:50%; bottom:calc(96px + env(safe-area-inset-bottom));
@@ -356,6 +489,17 @@
     pointer-events:none; opacity:0; transition:opacity .15s; z-index:10; line-height:1.4;
   }
   #aimHint.show{opacity:1;}
+  /* Sits a little higher than aimHint so the two never overlap even
+     though both are centred at the same horizontal position — the
+     Measure tool's own result readout, shown once both points are
+     marked, updated live while aiming for the second one. */
+  #measureResult{
+    position:absolute; left:50%; bottom:calc(134px + env(safe-area-inset-bottom));
+    transform:translateX(-50%); text-align:center; white-space:nowrap;
+    font-size:12px; font-weight:700; color:var(--oak-light); background:rgba(32,24,15,.92);
+    border:1px solid var(--oak-light); border-radius:10px; padding:6px 12px;
+    pointer-events:none; z-index:10; display:none;
+  }
 
   /* ---------- Mobile move joystick + fly buttons: one centred cluster ---------- */
   #leftControlCluster{
@@ -365,7 +509,7 @@
   #joyBase{
     position:relative;
     width:130px; height:130px; border-radius:50%;
-    background:rgba(32,24,15,.55); border:2px solid rgba(201,138,75,.5);
+    background:rgba(32,24,15,.12); border:2px solid rgba(201,138,75,.22);
     touch-action:none;
   }
   #joyKnob{
@@ -378,7 +522,11 @@
 
   /* Fly up/down as two tabs partly overlapping the joystick's own right
      edge — they visibly grow out of the circle instead of floating next
-     to it as a separate rectangular pair. */
+     to it as a separate rectangular pair. Deliberately the SAME
+     background/border colour as #joyBase itself (same values, not just
+     coincidentally similar ones) so the whole cluster always reads as
+     one connected control, and a future tweak to one can never
+     accidentally leave the other looking mismatched. */
   /* Each button spans exactly one half of the joystick's own height, so
      together they meet edge-to-edge at the circle's vertical centre with
      no gap and no overlap between THEM. Their own inner boundary is
@@ -388,8 +536,8 @@
      circle at one point and gaps away from it everywhere else. */
   #flyUpBtn, #flyDownBtn{
     position:absolute; left:78px; width:96px; height:65px;
-    border:2px solid rgba(201,138,75,.5); border-left:none;
-    background:rgba(32,24,15,.55); color:var(--parchment); font-size:16px;
+    border:2px solid rgba(201,138,75,.22); border-left:none;
+    background:rgba(32,24,15,.12); color:var(--parchment); font-size:16px;
     display:flex; align-items:center; justify-content:flex-end; padding-right:18px;
     touch-action:none; z-index:1;
     -webkit-mask-image: radial-gradient(circle 65px at -13px var(--joy-cy), transparent 65px, black 66px);
@@ -397,13 +545,24 @@
   }
   #flyUpBtn{top:0; --joy-cy:65px; border-radius:0 14px 0 0; border-bottom:none;}
   #flyDownBtn{top:65px; --joy-cy:0px; border-radius:0 0 14px 0;}
-  #flyUpBtn.pressed, #flyDownBtn.pressed{background:rgba(201,138,75,.5);}
+  #flyUpBtn.pressed, #flyDownBtn.pressed{background:rgba(201,138,75,.4);}
 
   /* ---------- Modal ---------- */
   .modal-bg{
     position:absolute; inset:0; background:rgba(13,10,6,.82); z-index:30;
     display:flex; align-items:center; justify-content:center; padding:20px;
   }
+  /* Confirmation modals that can appear ON TOP OF another already-open
+     modal (e.g. confirming "replace your current build?" while the
+     Load window is still open behind it) need a genuinely higher
+     z-index of their own — same z-index as any other .modal-bg would
+     leave stacking order to depend on DOM source order instead, and
+     since these two are declared EARLIER in the HTML than the Save/Load
+     modals, they'd silently render BEHIND them: the background dims as
+     expected, but the confirmation itself is invisible, sitting right
+     underneath the still-open Load window, only surfacing once that
+     window is closed by some other means. */
+  #genericConfirmModal, #levelStartConfirmModal{z-index:31;}
   .modal{
     max-width:420px; width:100%; max-height:85vh; background:var(--ink-2); border:1px solid var(--oak);
     border-radius:14px; box-shadow: var(--shadow);
@@ -445,6 +604,24 @@
     background:transparent; border:1px solid rgba(201,138,75,.4); color:var(--parchment);
   }
   .disclaimer{font-size:10px; color:var(--parchment-dim); margin-top:10px; opacity:.75; line-height:1.5;}
+  /* Team selection, in place of the old single "Get Started" button —
+     both cards do the same thing (start the game), the choice is just
+     remembered afterwards for whatever team-specific extras come later. */
+  #teamSelectLabel{font-family:'Fraunces',serif; font-weight:700; font-size:14px; color:var(--parchment); text-align:center; margin-bottom:10px;}
+  #teamSelectRow{display:flex; flex-direction:column; gap:10px;}
+  .team-card{
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+    width:100%; padding:14px 10px; border-radius:10px; cursor:pointer;
+    background:var(--ink); border:2px solid rgba(201,138,75,.35);
+    transition: transform .08s ease, border-color .15s ease, background .15s ease;
+  }
+  .team-card:hover, .team-card:active{border-color:var(--oak-light); background:rgba(201,138,75,.12);}
+  .team-card:active{transform:scale(.98);}
+  .team-card.chosen{border-color:var(--oak-light); background:rgba(201,138,75,.18);}
+  .team-card-logo-img{max-width:170px; max-height:42px; width:auto; height:auto; display:block;}
+  .team-card-logo-emoji{font-size:34px; line-height:1;}
+  .team-card-name{font-family:'Fraunces',serif; font-weight:700; font-size:13px; color:var(--parchment);}
+  .team-card-tag{font-size:10px; color:var(--parchment-dim);}
   #saveNameInput, #exportNameInput{
     width:100%; box-sizing:border-box; padding:10px 11px; border-radius:8px;
     border:1px solid rgba(201,138,75,.4); background:var(--ink); color:var(--parchment);
@@ -479,6 +656,47 @@
   .achievement-row .achievement-title{font-size:13px; color:var(--parchment); font-weight:700;}
   .achievement-row .achievement-desc{font-size:11px; color:var(--parchment-dim); margin-top:1px;}
   .achievement-row .achievement-status{font-size:16px; flex-shrink:0;}
+  /* Level rows in the Level-select modal reuse the exact same look as an
+     achievement row (icon-less here since a star/play glyph on the right
+     already tells you the state at a glance), but are themselves a
+     clickable <button> rather than a plain display row. */
+  /* Level tiles: a square grid instead of a full-width list — no
+     description text at all (that's what caused the unreadable-text
+     bug in the first place: the level rows were never actually given
+     the `.achievement-row` ancestor class the colour rule above
+     requires, so the browser's default black text rendered right on
+     top of a dark background). Number + star is all a tile shows; the
+     full level name still lives on as a hover tooltip via `title`
+     rather than being thrown away outright. */
+  #levelSelectList{display:grid; grid-template-columns:repeat(auto-fill, minmax(72px, 1fr)); gap:8px;}
+  .level-tile{
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+    aspect-ratio:1; background:rgba(0,0,0,.22); border:1px solid rgba(201,138,75,.25); border-radius:10px;
+    cursor:pointer; padding:8px; font-family:inherit;
+  }
+  .level-tile:hover, .level-tile:active{border-color:var(--oak-light); background:rgba(201,138,75,.12);}
+  .level-tile-number{font-size:20px; font-weight:700; color:var(--parchment);}
+  .level-tile-star{font-size:18px; color:var(--parchment-dim);}
+  .level-tile.done .level-tile-star{color:#ffd479;}
+  /* A small persistent pill while a level is active, sitting just under
+     the main top toolbar (never overlapping it) — shows which level and
+     how many slots are still open, plus a way to bail out back to
+     freeform building at any time without having to finish or hunt for
+     a menu entry. Hidden entirely (display:none) whenever no level is
+     in progress. */
+  #levelHud{
+    position:absolute; top:calc(64px + env(safe-area-inset-top)); left:50%; z-index:13;
+    transform:translateX(-50%);
+    display:none; align-items:center; gap:10px;
+    background:rgba(32,24,15,.75); border:1px solid rgba(201,138,75,.4); border-radius:10px;
+    padding:7px 8px 7px 14px; pointer-events:auto; box-shadow:var(--shadow);
+  }
+  #levelHudTitle{font-size:12px; color:var(--parchment); font-weight:700; white-space:nowrap;}
+  #levelHudProgress{font-size:11px; color:var(--oak-light); white-space:nowrap;}
+  #levelHudExitBtn{
+    background:rgba(201,138,75,.15); border:1px solid rgba(201,138,75,.35); border-radius:6px;
+    color:var(--parchment-dim); font-size:12px; padding:4px 8px; cursor:pointer; line-height:1;
+  }
   /* A brief top-centre banner when something unlocks — auto-hides
      itself, no click needed. */
   #achievementToast{
@@ -513,7 +731,21 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v1.07</div>
+  <div id="versionLabel">v1.51</div>
+  <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
+       the actual target, instead of a big text box that used to eat
+       into the 3D view (especially cramped on a phone screen). Buttons
+       that shouldn't be used for the current step/phase are disabled
+       directly (see updateTutorialUI/setTutorialButtonsEnabled) rather
+       than dimming the whole screen — only the specific buttons that
+       aren't relevant right now look inactive; the 3D view itself
+       always stays completely clear. -->
+  <div id="tutorialHand" style="display:none;">👇</div>
+  <div id="tutorialHint" style="display:none;">
+    <span id="tutorialHintText"></span>
+    <button id="tutorialNextBtn" style="display:none;">Next</button>
+    <button id="tutorialSkipBtn">Skip</button>
+  </div>
   <div id="lookLayer"></div>
   <div id="leftControlCluster">
     <div id="joyBase">
@@ -526,7 +758,6 @@
   <div id="topLeftRow">
     <button id="modeToggleBtn" title="Switch build mode"><span id="modeToggleIcon">🌳</span><small id="modeToggleLabel">Deco</small></button>
     <button id="typeMenuBtn"><span id="typeMenuLabel">WS25mZ</span> ▾</button>
-    <button id="colorBtn" title="Colour"><span id="colorSwatchDot"></span></button>
   </div>
   <div id="typeMenuPanel">
     <div class="group" id="mainTypeGroup" style="flex-wrap:wrap; max-width:170px;">
@@ -539,7 +770,6 @@
     </div>
   </div>
   <div id="colorPanel">
-    <div class="group-label">Colour</div>
     <div class="swatch-row">
       <button class="swatch wood-swatch active" id="colorWoodBtn" title="Natural wood"></button>
       <button class="swatch" data-color="#c0392b" style="background:#c0392b"></button>
@@ -590,6 +820,10 @@
     <div class="group">
       <button class="btn wide" id="partsListBtn">🧾 Parts list<small>Briqs used</small></button>
     </div>
+    <div class="group-label" style="margin-top:10px;">Levels</div>
+    <div class="group">
+      <button class="btn wide" id="levelsBtn">🎯 Levels<small>Guided challenges</small></button>
+    </div>
     <div class="group-label" style="margin-top:10px;">View</div>
     <div class="group">
       <button class="btn wide" id="viewToggle" disabled title="Coming soon">🐦 Bird's-eye<small>(coming soon)</small></button>
@@ -611,6 +845,7 @@
     <div class="group-label" style="margin-top:10px;">Options</div>
     <div class="group">
       <button class="btn wide" id="settingsBtn">⚙️ Settings<small>Sound & controls</small></button>
+      <button class="btn wide" id="tutorialRestartBtn" disabled title="Coming soon">🧱 Tutorial<small>(coming soon)</small></button>
     </div>
     <div class="group-label" style="margin-top:10px;">Share the game</div>
     <div class="group">
@@ -620,8 +855,17 @@
 
   <div id="dock">
     <div class="panel" id="buildPanel">
-      <button id="buildPanelToggleBtn" title="Hide/show menu">▼ Menu</button>
       <div class="rows">
+        <div id="toolGroup">
+          <div class="group">
+            <button class="btn tool-place active" id="toolPlace">🧱<small>Build</small></button>
+            <button class="btn tool-remove" id="toolRemove">🗑<small>Remove</small></button>
+            <button class="btn tool-paint" id="toolPaint">🎨<small>Recolour</small></button>
+            <button class="btn tool-copy" id="toolCopy">📋<small>Copy</small></button>
+            <button class="btn tool-measure" id="toolMeasure">📏<small>Measure</small></button>
+          </div>
+        </div>
+        <div id="subFunctionGroup">
         <div id="briqGroupSize">
           <div class="group" id="subTypeGroup"></div>
         </div>
@@ -630,6 +874,7 @@
             <button class="btn active" data-grid="1">⚀<small>Single</small></button>
             <button class="btn" data-grid="10">▦<small>Small</small></button>
             <button class="btn" data-grid="30">▩<small>Large</small></button>
+            <button class="btn" data-grid="box">⬛<small>Box</small></button>
           </div>
         </div>
         <div id="roofMaterialGroup" style="display:none;">
@@ -642,17 +887,21 @@
         </div>
         <div id="copyGroup" style="display:none;">
           <div class="group">
-            <span id="copyStatusLabel" style="font-size:11px; color:var(--parchment-dim); align-self:center; padding:0 6px;"></span>
             <button class="btn" id="copyNewSelectionBtn">🔄<small>New area</small></button>
+          </div>
+        </div>
+        <div id="paintGroup" style="display:none;">
+          <div class="group">
+            <button class="btn" id="colorBtnInline" title="Colour"><span id="colorSwatchDotInline"></span></button>
           </div>
         </div>
         <div id="decorGroupType" style="display:none; position:relative;">
           <div class="group" id="decorCategoryGroup" style="margin-bottom:4px;"></div>
-          <div class="group" id="decorTypeGroup" style="flex-wrap:nowrap; max-width:220px; overflow:hidden;"></div>
-          <div class="group" style="margin-top:4px;">
+          <div class="group" style="flex-wrap:nowrap; align-items:center; gap:4px;">
             <button class="btn" id="decorPrevBtn">◀</button>
-            <span id="decorPageLabel" style="font-size:10px; color:var(--parchment-dim); align-self:center; padding:0 4px;"></span>
+            <div class="group" id="decorTypeGroup" style="flex-wrap:nowrap; max-width:180px; overflow:hidden;"></div>
             <button class="btn" id="decorNextBtn">▶</button>
+            <span id="decorPageLabel" style="font-size:9px; color:var(--parchment-dim); align-self:center; padding:0 2px;"></span>
           </div>
           <div id="decorSizePopup" style="display:none;">
             <div class="sub" style="margin:0 0 6px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
@@ -662,21 +911,20 @@
             <div class="group" id="decorSizeButtons"></div>
           </div>
         </div>
-        <div>
-          <div class="group">
-            <button class="btn tool-place active" id="toolPlace">🧱<small>Build</small></button>
-            <button class="btn tool-remove" id="toolRemove">🗑<small>Remove</small></button>
-            <button class="btn tool-paint" id="toolPaint">🎨<small>Recolour</small></button>
-            <button class="btn tool-copy" id="toolCopy">📋<small>Copy</small></button>
-          </div>
         </div>
       </div>
+      <button id="buildPanelToggleBtn" title="Hide/show menu">◀</button>
     </div>
   </div>
 
-  <button id="rotateBtn" title="Rotate">⟳</button>
+  <!-- An inline SVG instead of the "⟳" glyph — some fonts/platforms only
+       have a low-resolution fallback bitmap for that particular Unicode
+       symbol, which looks pixelated once scaled up to the button's own
+       size; a vector path never has that problem at any size or zoom. -->
+  <button id="rotateBtn" title="Rotate"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7c3.3 0 6 2.7 6 6 0 1.4-.5 2.7-1.3 3.7l1.5 1.5C19.4 16.9 20 14.5 20 13c0-4.4-3.6-8-8-8zm-6 8c0-1.4.5-2.7 1.3-3.7L5.8 7.8C4.6 9.1 4 10.5 4 13c0 4.4 3.6 8 8 8v3l5-4-5-4v3c-3.3 0-6-2.7-6-6z"/></svg></button>
 
   <div id="aimHint"></div>
+  <div id="measureResult"></div>
 
   <div id="actionBtn">BUILD</div>
 
@@ -694,7 +942,19 @@
         <div class="disclaimer">This game is a private fan project, inspired by the TRIQBRIQ building system, and has no affiliation with TRIQBRIQ AG.</div>
       </div>
       <div class="modal-footer">
-        <button class="cta" id="startBtn">Get Started</button>
+        <div id="teamSelectLabel">Choose a Team to get started</div>
+        <div id="teamSelectRow">
+          <button class="team-card" id="teamVkeBtn" data-team="vke">
+            <img class="team-card-logo-img" alt="VKE" src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4NCjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIgImh0dHA6Ly93d3cudzMub3JnL0dyYXBoaWNzL1NWRy8xLjEvRFREL3N2ZzExLmR0ZCI+DQo8IS0tIENyZWF0b3I6IENvcmVsRFJBVyAoVGVzdHZlcnNpb24pIC0tPg0KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbDpzcGFjZT0icHJlc2VydmUiIHdpZHRoPSIyMDBtbSIgaGVpZ2h0PSI1MG1tIiB2ZXJzaW9uPSIxLjEiIHN0eWxlPSJzaGFwZS1yZW5kZXJpbmc6Z2VvbWV0cmljUHJlY2lzaW9uOyB0ZXh0LXJlbmRlcmluZzpnZW9tZXRyaWNQcmVjaXNpb247IGltYWdlLXJlbmRlcmluZzpvcHRpbWl6ZVF1YWxpdHk7IGZpbGwtcnVsZTpldmVub2RkOyBjbGlwLXJ1bGU6ZXZlbm9kZCINCnZpZXdCb3g9IjAgMCAyMDAwMCA1MDAwIg0KIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIg0KIHhtbG5zOnhvZG09Imh0dHA6Ly93d3cuY29yZWwuY29tL2NvcmVsZHJhdy9vZG0vMjAwMyI+DQogPGRlZnM+DQogIDxzdHlsZSB0eXBlPSJ0ZXh0L2NzcyI+DQogICA8IVtDREFUQVsNCiAgICAuZmlsMCB7ZmlsbDojMDQwNDA0fQ0KICAgIC5maWwxIHtmaWxsOiNENzFGMjJ9DQogICAgLmZpbDIge2ZpbGw6YmxhY2s7ZmlsbC1ydWxlOm5vbnplcm99DQogICBdXT4NCiAgPC9zdHlsZT4NCiA8L2RlZnM+DQogPGcgaWQ9IkViZW5lX3gwMDIwXzEiPg0KICA8bWV0YWRhdGEgaWQ9IkNvcmVsQ29ycElEXzBDb3JlbC1MYXllciIvPg0KICA8cGF0aCBjbGFzcz0iZmlsMCIgZD0iTTcxOTQuMjYgNDMwLjkzYy01NjAuNDYsLTE3MS42MiAtNzY4LjcsMTE1LjQ1IC05OTUuMDIsNDA0LjE2bC0xMjgwLjU0IDE2MTIuMTRjLTMyOS4yOCw0MjYuMTcgLTUwOS4xOSw3ODMuNzQgLTc1NC40OCw1NTcuNjUgLTEwMS4xOSwtOTMuMjcgLTI0OC44MSwtMzA5LjI0IC0zMzAuMywtNDExLjI2bC0xMjk3LjM0IC0xNjI5Ljg3Yy0zMzkuMTEsLTQyNC41NSAtMzYxLjI1LC01OTMuODMgLTkxMy44NCwtNTU5LjU4IC0zNTUuODgsMjIuMDUgLTE0MC4yMiwxOTkuMzQgLTI4Ljg1LDMzOC4yOCA0NTMuMDMsNTY1LjEzIDg1NS42NSwxMDYxLjY2IDEzMDEuMDksMTYyNS45OSAxODIuNDMsMjMxLjEyIDc4MC42MywxMDY1Ljg0IDEwMTYuNjksMTE3MS4wOCA3NTUuNjYsMzM2Ljg3IDExMzguNDgsLTMxMy4zNiAxNDEzLjE3LC02NTEuMDNsMTI4NC44NCAtMTYwNy4yNWMxMjMuNDEsLTE2My4xMSA1OTUuOTUsLTY1NS4wOSA1ODQuNTgsLTg1MC4zMXoiLz4NCiAgPHBhdGggY2xhc3M9ImZpbDAiIGQ9Ik0xMDIzNS4yNyAxOTc4LjIxYzE3NC4zLC0xMjUuOCA1MzYuNjUsLTI2OC43IDc1MS45NywtMzc1Ljg2bDE0OTEuMzMgLTczMC43NGMzODEuMzgsLTE4MC4xNiA2NTQuNDYsLTI1MS41NCA2NDUuMzgsLTQ0MS45OSAtMTM5LjI0LC0zOS43NiAtNDg1LjY2LC0yOC40OCAtNjY4LjQ2LC0yNC4yNyAtMzI5Ljg1LDcuNjEgLTExNjMuMyw0NjYuMiAtMTQ3Ny4zNyw2MjQuMzhsLTE0MTYuODQgNjk4LjkxYy0xOTMuOTEsOTEuOTQgLTM0Ni4yNyw5Ny4zOCAtMzU4LjMxLDMzNy41NSA3NjIuMjcsNDE1Ljk2IDE2NjguMDQsODI2LjEzIDI0NjQuNywxMjMwLjEzIDYyMC4zLDMxNC41NiA3NzUuNjksMzYyLjU3IDE0NjcuNjksMjgxLjY4IC0xOC4wMSwtMjAxLjYyIC0zMTYuMiwtMjg5LjQgLTY4My42MiwtNDY2LjkybC0yMTYxLjk0IC0xMDgyLjU4Yy0zOC4zMywtMjcuOTQgLTM3LjcxLC0zMS4zIC01NC41MywtNTAuMjl6Ii8+DQogIDxwYXRoIGNsYXNzPSJmaWwwIiBkPSJNMTg2MDMuNDkgMzEzMi4xMWMtMTU3LjE3LC04My4xMSAtMzg1LjA1LC01Ni44OCAtNTczLjYyLC01Ni40MSAtOTQ1Ljg5LDIuMzUgLTMwNjkuNzYsLTUzLjMyIC0zNzU5Ljc5LDEwLjQ1IC04My41OSw1MzYuNCAyODguODIsNTI1LjUzIDcyNi4yNSw1MjIuMjQgNTYxLjYyLC00LjIxIDM2MTYuNzQsNTEuMjUgMzcyNC44MiwtNTguNzggMTQyLjI4LC0xNDQuODUgLTEuMzQsLTM1NS45OSAtMTE3LjY2LC00MTcuNXoiLz4NCiAgPHBhdGggY2xhc3M9ImZpbDAiIGQ9Ik0xNDI3NS40OCA5MzQuNzFjMTAzMS4zOSw0OC42NSAyNjEzLjAzLC0xLjY3IDM3NTQuNiwzLjY2IDQwNC43NCwxLjg5IDgzMC43MywtMzEuNDEgNzE3LjM2LC00OTMuOTcgLTIyNS45MiwtODQuMDUgLTMwOTguMDYsLTM1LjE1IC0zNzUyLjE3LC0zOS4wNCAtMjA2Ljc0LC0xLjIzIC0zNjQuMTYsLTUuMTYgLTUyNi42Myw5MS45OCAtMTIwLjg1LDcyLjI2IC0yNTEuNDcsMjIzLjEgLTE5My4xNiw0MzcuMzd6Ii8+DQogIDxwYXRoIGNsYXNzPSJmaWwxIiBkPSJNMTgwNjUuNzQgMjI2OS4zNWM3MDYuNzYsLTkuMjYgNzU1LjY5LC00MDQuNTQgNjY0LjM0LC00OTMuMzggLTgxLjQxLC03OS4xNSAtMjIwMS43NCwtMzIuOTggLTI0OTkuMTcsLTMyLjk5IC00MjMuNSwtMC4wMSAtODQ3Ljk5LC0zLjMzIC0xMjcxLjM1LC0wLjk0IC0zNzYuMzQsMi4xMyAtNzEwLjQyLDExNi4xOSAtNzAwLjMxLDUxNC42MmwzODA2LjQ5IDEyLjY5eiIvPg0KICA8cGF0aCBjbGFzcz0iZmlsMCIgZD0iTTgyMzAuMTEgMzQyNC40MWM3Mi4yNSwyNDQuNjcgNTE0Ljc2LDI1Ni4zIDU5Mi40OSwtNS4yNCAzNy43OCwtMTI3LjEgMjcuMjEsLTI3MzEuODcgLTUuMjksLTI4NDMuNjggLTcxLjY0LC0yNDYuNDQgLTUxNC44MSwtMjIzLjAzIC01ODQuMTgsMS45MiAtNDEuMjEsMTMzLjYzIC0zMS4yNiwyNzUxLjM3IC0zLjAyLDI4NDd6Ii8+DQogIDxwYXRoIGNsYXNzPSJmaWwyIiBkPSJNMTkxNS43NyA0ODM3LjY0Yy03MC45MSwwIC0xMzkuMDYsLTkuNTMgLTIwNC4wNSwtMjguNTggLTY0Ljk4LC0xOS4wNSAtMTE3LjI2LC00My44MiAtMTU2Ljg0LC03NC4wOGw2OC41OCAtMTUyLjE5YzM3LjQ2LDI3LjA5IDgyLjEzLDQ5LjMyIDEzNC40MSw2Ni44OCA1Mi4yOCwxNy41NyAxMDUuMiwyNi40NiAxNTguNzUsMjYuNDYgNDEuNywwIDc1LjE0LC00LjIzIDEwMC41NCwtMTIuNDkgMjUuNCwtOC40NiA0NC4wMywtMjAuMSA1NS44OCwtMzQuNzEgMTIuMDYsLTE0LjgyIDE3Ljk5LC0zMS41NCAxNy45OSwtNTAuMTYgMCwtMjQuMzUgLTkuNTIsLTQzLjYxIC0yOC4zNiwtNTggLTE4Ljg0LC0xNC42MSAtNDMuMzksLTI2LjI1IC03NC4wOSwtMzUuMTQgLTMwLjY5LC05LjEgLTY0LjM0LC0xNy41NyAtMTAxLjM4LC0yNS42MSAtMzYuODMsLTguMDQgLTczLjY2LC0xNy43OCAtMTEwLjcxLC0yOS40MiAtMzcuMDQsLTExLjY0IC03MC42OSwtMjYuODggLTEwMS4zOCwtNDUuMyAtMzAuMjcsLTE4LjYyIC01NS4wNCwtNDMuMTggLTc0LjA5LC03My44NyAtMTguODQsLTMwLjY5IC0yOC4xNSwtNjkuODUgLTI4LjE1LC0xMTcuMjYgMCwtNTAuMTcgMTMuNTUsLTk2LjEgNDAuNjQsLTEzNy41OSAyNy4zMSwtNDEuNjkgNjguMzcsLTc0LjkzIDEyMy42MSwtOTkuOSA1NS4yNSwtMjQuOTggMTI0LjY4LC0zNy40NyAyMDguNzEsLTM3LjQ3IDU1LjI0LDAgMTA5Ljg1LDYuNzggMTY0LjA0LDIwLjExIDU0LjE5LDEzLjM0IDEwMS44MSwzMi44MSAxNDIuODcsNTguNDJsLTYyLjY1IDE1Mi40Yy00MC42NCwtMjMuNDkgLTgxLjkxLC00MC44NSAtMTI0LjA0LC01Mi4wNyAtNDEuOTEsLTExLjIyIC04Mi41NSwtMTYuOTMgLTEyMi4xMywtMTYuOTMgLTQwLjQzLDAgLTczLjY2LDQuNjUgLTk5LjI3LDE0LjE4IC0yNS40LDkuMzEgLTQzLjgxLDIxLjggLTU1LjQ2LDM3LjI1IC0xMS4yMSwxNS4yNCAtMTYuOTMsMzIuNiAtMTYuOTMsNTIuMDcgMCwyMy43MSA5LjMxLDQyLjc2IDI4LjE1LDU2Ljk0IDE4Ljg0LDE0LjE4IDQzLjM5LDI1LjgyIDc0LjA5LDM0LjUgMzAuNjksOC40NyA2NC4zNCwxNi45NCAxMDEuMzgsMjUuMTkgMzcuMDUsOC4wNCA3My44OCwxNy43OCAxMTAuNzEsMjkgMzcuMDQsMTEuMjIgNzAuNjksMjYuMDMgMTAxLjE3LDQ0LjQ1IDMwLjQ4LDE4LjQxIDU1LjI1LDQyLjc2IDc0LjA5LDczLjQ1IDE4LjgzLDMwLjY5IDI4LjM2LDY5LjIxIDI4LjM2LDExNS41NyAwLDQ5LjMyIC0xMy43Niw5NC44MiAtNDEuMDYsMTM2LjUyIC0yNy41Miw0MS4yOCAtNjkuMDEsNzQuNzIgLTEyNC40Niw5OS45MSAtNTUuMjUsMjQuOTggLTEyNC44OSwzNy40NyAtMjA4LjkyLDM3LjQ3em0yMTQxLjkzIDBjLTY5Ljg1LDAgLTEzNC40LC0xMS40MyAtMTkzLjY3LC0zNC4wOCAtNTkuNDgsLTIzLjA4IC0xMTAuOTEsLTU1LjI1IC0xNTQuNTIsLTk2LjUyIC00My4zOSwtNDEuMjggLTc3LjA0LC04OS45NiAtMTAxLjM5LC0xNDUuNjMgLTI0LjEzLC01NS44OCAtMzYuMTksLTExNi44NCAtMzYuMTksLTE4My4wOSAwLC02Ni4yNSAxMi4wNiwtMTI3LjIxIDM2LjE5LC0xODIuNDYgMjQuMzUsLTU1LjY3IDU4LjIxLC0xMDQuMTQgMTAxLjgyLC0xNDUuODQgNDMuNiwtNDEuNDggOTUuMDMsLTczLjY2IDE1NC4wOSwtOTYuMzEgNTkuMDUsLTIzLjA3IDEyMy42MSwtMzQuNSAxOTMuNDYsLTM0LjUgNzAuMDYsMCAxMzQuNDEsMTEuNDMgMTkzLjQ3LDM0LjA4IDU4Ljg0LDIyLjY1IDExMC4wNiw1NC44MiAxNTMuNDUsOTYuMSA0My40LDQxLjI3IDc3LjA1LDg5Ljk2IDEwMS4zOSwxNDUuODQgMjQuMTMsNTUuNjYgMzYuMiwxMTYuNjIgMzYuMiwxODMuMDkgMCw2Ni40NiAtMTIuMDcsMTI3LjYzIC0zNi4yLDE4My43MiAtMjQuMzQsNTUuNjcgLTU3Ljk5LDEwNC4zNiAtMTAxLjM5LDE0NS42MyAtNDMuMzksNDEuMjggLTk0LjYxLDczLjQ1IC0xNTMuNDUsOTYuMSAtNTkuMDYsMjIuNjUgLTEyMy40MSwzMy44NyAtMTkzLjI2LDMzLjg3em0tMC4yMSAtMTcwLjgyYzQwLjIyLDAgNzcuNDcsLTYuOTkgMTExLjU1LC0yMC43NCAzNC4wOCwtMTQuMTkgNjMuOTIsLTM0LjA4IDg5LjMyLC01OS42OSAyNS40LC0yNS44MyA0NS4wOSwtNTYuMzEgNTkuMjcsLTkxLjQ0IDE0LjE4LC0zNS4xNCAyMS4zOCwtNzQuMDkgMjEuMzgsLTExNi42MyAwLC00Mi43NiAtNy4yLC04MS40OSAtMjEuMzgsLTExNi40MiAtMTQuMTgsLTM0LjkyIC0zMy44NywtNjUuNCAtNTkuMjcsLTkxLjAyIC0yNS40LC0yNS44MiAtNTUuMjQsLTQ1LjcyIC04OS4zMiwtNTkuNjkgLTM0LjA4LC0xNC4xOCAtNzEuMzMsLTIxLjE2IC0xMTEuNTUsLTIxLjE2IC00MC40MywwIC03Ny42OCw2Ljk4IC0xMTEuOTcsMjEuMTYgLTM0LjI5LDEzLjk3IC02NC4zNSwzMy44NyAtODkuOTYsNTkuNjkgLTI1LjQsMjUuNjIgLTQ1LjI5LDU2LjEgLTU5LjQ4LDkxLjIzIC0xNC4xOCwzNC45MyAtMjEuMTYsNzMuNjYgLTIxLjE2LDExNi4yMSAwLDQyLjU0IDYuOTgsODEuMjggMjEuMTYsMTE2LjQxIDE0LjE5LDM1LjE0IDM0LjA4LDY1LjYyIDU5LjQ4LDkxLjY2IDI1LjYxLDI1LjgyIDU1LjY3LDQ1LjcyIDg5Ljk2LDU5LjY5IDM0LjI5LDEzLjc1IDcxLjU0LDIwLjc0IDExMS45NywyMC43NHptMTgzNi43MSAxNTYuMjFsMCAtODg5IDIwMS43MiAwIDAgNzI0LjMyIDQ0Ny4wNCAwIDAgMTY0LjY4IC02NDguNzYgMHptMjM1NC40NSAxNC42MWMtMTI1LjUyLDAgLTIyMy43MywtMzQuOTMgLTI5NC42NCwtMTA0Ljc4IC03MC43LC02OS44NSAtMTA2LjA1LC0xNzAuMTggLTEwNi4wNSwtMzAxLjJsMCAtNDk3LjYzIDIwMS4zIDAgMCA0OTEuMjhjMCw4NC44OCAxNy41NywxNDYuNDcgNTIuOTIsMTg0LjM2IDM1LjM0LDM4LjEgODQuODcsNTcuMTUgMTQ4LjM3LDU3LjE1IDYzLjcyLDAgMTEzLjI1LC0xOS4wNSAxNDguMzgsLTU3LjE1IDM1LjE0LC0zNy44OSA1Mi43MSwtOTkuNDggNTIuNzEsLTE4NC4zNmwwIC00OTEuMjggMTk3LjkxIDAgMCA0OTcuNjNjMCwxMzEuMDIgLTM1LjU2LDIzMS4zNSAtMTA2LjQ3LDMwMS4yIC03MC43LDY5Ljg1IC0xNjguOTEsMTA0Ljc4IC0yOTQuNDMsMTA0Ljc4em0xOTg1LjMgLTE0LjYxbDAgLTcyNC4zMiAtMjg1Ljc1IDAgMCAtMTY0LjY4IDc3Mi4xNiAwIDAgMTY0LjY4IC0yODUuMzMgMCAwIDcyNC4zMiAtMjAxLjA4IDB6bTE3OTIuNjggMGwwIC04ODkgMjAxLjcyIDAgMCA4ODkgLTIwMS43MiAwem0yMDM4Ljg1IDE0LjYxYy02OS44NSwwIC0xMzQuNCwtMTEuNDMgLTE5My42NywtMzQuMDggLTU5LjQ4LC0yMy4wOCAtMTEwLjkxLC01NS4yNSAtMTU0LjUyLC05Ni41MiAtNDMuMzksLTQxLjI4IC03Ny4wNCwtODkuOTYgLTEwMS4zOSwtMTQ1LjYzIC0yNC4xMywtNTUuODggLTM2LjE5LC0xMTYuODQgLTM2LjE5LC0xODMuMDkgMCwtNjYuMjUgMTIuMDYsLTEyNy4yMSAzNi4xOSwtMTgyLjQ2IDI0LjM1LC01NS42NyA1OC4yMSwtMTA0LjE0IDEwMS44MiwtMTQ1Ljg0IDQzLjYsLTQxLjQ4IDk1LjAzLC03My42NiAxNTQuMDksLTk2LjMxIDU5LjA1LC0yMy4wNyAxMjMuNjEsLTM0LjUgMTkzLjQ2LC0zNC41IDcwLjA2LDAgMTM0LjQxLDExLjQzIDE5My40NywzNC4wOCA1OC44NCwyMi42NSAxMTAuMDYsNTQuODIgMTUzLjQ1LDk2LjEgNDMuNCw0MS4yNyA3Ny4wNSw4OS45NiAxMDEuMzksMTQ1Ljg0IDI0LjEzLDU1LjY2IDM2LjIsMTE2LjYyIDM2LjIsMTgzLjA5IDAsNjYuNDYgLTEyLjA3LDEyNy42MyAtMzYuMiwxODMuNzIgLTI0LjM0LDU1LjY3IC01Ny45OSwxMDQuMzYgLTEwMS4zOSwxNDUuNjMgLTQzLjM5LDQxLjI4IC05NC42MSw3My40NSAtMTUzLjQ1LDk2LjEgLTU5LjA2LDIyLjY1IC0xMjMuNDEsMzMuODcgLTE5My4yNiwzMy44N3ptLTAuMjEgLTE3MC44MmM0MC4yMiwwIDc3LjQ3LC02Ljk5IDExMS41NSwtMjAuNzQgMzQuMDgsLTE0LjE5IDYzLjkyLC0zNC4wOCA4OS4zMiwtNTkuNjkgMjUuNCwtMjUuODMgNDUuMDksLTU2LjMxIDU5LjI3LC05MS40NCAxNC4xOCwtMzUuMTQgMjEuMzgsLTc0LjA5IDIxLjM4LC0xMTYuNjMgMCwtNDIuNzYgLTcuMiwtODEuNDkgLTIxLjM4LC0xMTYuNDIgLTE0LjE4LC0zNC45MiAtMzMuODcsLTY1LjQgLTU5LjI3LC05MS4wMiAtMjUuNCwtMjUuODIgLTU1LjI0LC00NS43MiAtODkuMzIsLTU5LjY5IC0zNC4wOCwtMTQuMTggLTcxLjMzLC0yMS4xNiAtMTExLjU1LC0yMS4xNiAtNDAuNDMsMCAtNzcuNjgsNi45OCAtMTExLjk3LDIxLjE2IC0zNC4yOSwxMy45NyAtNjQuMzUsMzMuODcgLTg5Ljk2LDU5LjY5IC0yNS40LDI1LjYyIC00NS4yOSw1Ni4xIC01OS40OCw5MS4yMyAtMTQuMTgsMzQuOTMgLTIxLjE2LDczLjY2IC0yMS4xNiwxMTYuMjEgMCw0Mi41NCA2Ljk4LDgxLjI4IDIxLjE2LDExNi40MSAxNC4xOSwzNS4xNCAzNC4wOCw2NS42MiA1OS40OCw5MS42NiAyNS42MSwyNS44MiA1NS42Nyw0NS43MiA4OS45Niw1OS42OSAzNC4yOSwxMy43NSA3MS41NCwyMC43NCAxMTEuOTcsMjAuNzR6bTE4MzYuNzEgMTU2LjIxbDAgLTg4OSAxNjUuOTUgMCA1MjguNzQgNjQ2LjAxIC04MC40MyAwIDAgLTY0Ni4wMSAxOTguNTQgMCAwIDg4OSAtMTY1Ljk0IDAgLTUyOC43NSAtNjQ1LjggODAuNjUgMCAwIDY0NS44IC0xOTguNzYgMHptMjUxMC44NyAxNC42MWMtNzAuOTEsMCAtMTM5LjA2LC05LjUzIC0yMDQuMDUsLTI4LjU4IC02NC45OCwtMTkuMDUgLTExNy4yNiwtNDMuODIgLTE1Ni44NCwtNzQuMDhsNjguNTggLTE1Mi4xOWMzNy40NiwyNy4wOSA4Mi4xMyw0OS4zMiAxMzQuNDEsNjYuODggNTIuMjgsMTcuNTcgMTA1LjIsMjYuNDYgMTU4Ljc1LDI2LjQ2IDQxLjcsMCA3NS4xNCwtNC4yMyAxMDAuNTQsLTEyLjQ5IDI1LjQsLTguNDYgNDQuMDMsLTIwLjEgNTUuODgsLTM0LjcxIDEyLjA2LC0xNC44MiAxNy45OSwtMzEuNTQgMTcuOTksLTUwLjE2IDAsLTI0LjM1IC05LjUyLC00My42MSAtMjguMzYsLTU4IC0xOC44NCwtMTQuNjEgLTQzLjM5LC0yNi4yNSAtNzQuMDksLTM1LjE0IC0zMC42OSwtOS4xIC02NC4zNCwtMTcuNTcgLTEwMS4zOCwtMjUuNjEgLTM2LjgzLC04LjA0IC03My42NiwtMTcuNzggLTExMC43MSwtMjkuNDIgLTM3LjA0LC0xMS42NCAtNzAuNjksLTI2Ljg4IC0xMDEuMzgsLTQ1LjMgLTMwLjI3LC0xOC42MiAtNTUuMDQsLTQzLjE4IC03NC4wOSwtNzMuODcgLTE4Ljg0LC0zMC42OSAtMjguMTUsLTY5Ljg1IC0yOC4xNSwtMTE3LjI2IDAsLTUwLjE3IDEzLjU1LC05Ni4xIDQwLjY0LC0xMzcuNTkgMjcuMzEsLTQxLjY5IDY4LjM3LC03NC45MyAxMjMuNjEsLTk5LjkgNTUuMjUsLTI0Ljk4IDEyNC42OCwtMzcuNDcgMjA4LjcxLC0zNy40NyA1NS4yNCwwIDEwOS44NSw2Ljc4IDE2NC4wNCwyMC4xMSA1NC4xOSwxMy4zNCAxMDEuODEsMzIuODEgMTQyLjg3LDU4LjQybC02Mi42NSAxNTIuNGMtNDAuNjQsLTIzLjQ5IC04MS45MSwtNDAuODUgLTEyNC4wNCwtNTIuMDcgLTQxLjkxLC0xMS4yMiAtODIuNTUsLTE2LjkzIC0xMjIuMTMsLTE2LjkzIC00MC40MywwIC03My42Niw0LjY1IC05OS4yNywxNC4xOCAtMjUuNCw5LjMxIC00My44MSwyMS44IC01NS40NiwzNy4yNSAtMTEuMjEsMTUuMjQgLTE2LjkzLDMyLjYgLTE2LjkzLDUyLjA3IDAsMjMuNzEgOS4zMSw0Mi43NiAyOC4xNSw1Ni45NCAxOC44NCwxNC4xOCA0My4zOSwyNS44MiA3NC4wOSwzNC41IDMwLjY5LDguNDcgNjQuMzQsMTYuOTQgMTAxLjM4LDI1LjE5IDM3LjA1LDguMDQgNzMuODgsMTcuNzggMTEwLjcxLDI5IDM3LjA0LDExLjIyIDcwLjY5LDI2LjAzIDEwMS4xNyw0NC40NSAzMC40OCwxOC40MSA1NS4yNSw0Mi43NiA3NC4wOSw3My40NSAxOC44MywzMC42OSAyOC4zNiw2OS4yMSAyOC4zNiwxMTUuNTcgMCw0OS4zMiAtMTMuNzYsOTQuODIgLTQxLjA2LDEzNi41MiAtMjcuNTIsNDEuMjggLTY5LjAxLDc0LjcyIC0xMjQuNDYsOTkuOTEgLTU1LjI1LDI0Ljk4IC0xMjQuODksMzcuNDcgLTIwOC45MiwzNy40N3oiLz4NCiA8L2c+DQo8L3N2Zz4NCg==">
+            <span class="team-card-name">Team VKE</span>
+            <span class="team-card-tag">Machine & production-line engineering</span>
+          </button>
+          <button class="team-card" id="teamTriqbriqBtn" data-team="triqbriq">
+            <span class="team-card-logo-emoji">⚙️</span>
+            <span class="team-card-name">Team TriqBriq</span>
+            <span class="team-card-tag">The Briq makers themselves</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -769,6 +1029,67 @@
       </div>
       <div class="modal-footer">
         <button class="cta ghost" id="qrCloseBtn" style="width:100%;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="levelHud">
+    <div>
+      <div id="levelHudTitle"></div>
+      <div id="levelHudProgress"></div>
+    </div>
+    <button id="levelHudExitBtn" title="Leave level">✕</button>
+  </div>
+
+  <div class="modal-bg" id="genericConfirmModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-scroll">
+        <h2 id="genericConfirmTitle"></h2>
+        <div class="sub" id="genericConfirmMessage"></div>
+      </div>
+      <div class="modal-footer row">
+        <button class="cta ghost" id="genericConfirmCancelBtn">Cancel</button>
+        <button class="cta" id="genericConfirmYesBtn">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="levelStartConfirmModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-scroll">
+        <h2>⚠️ Level starten?</h2>
+        <div class="sub">Dein kompletter aktueller Bau (Briqs und Deko, überall) wird dabei unwiderruflich gelöscht.</div>
+      </div>
+      <div class="modal-footer row">
+        <button class="cta ghost" id="levelStartConfirmCancelBtn">Abbrechen</button>
+        <button class="cta" id="levelStartConfirmYesBtn">Level starten</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="levelSelectModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-scroll">
+        <h2>🎯 Levels</h2>
+        <div class="sub">Baue die vorgegebene Struktur nach — Rahmen zeigen, wo welcher Briq hinkommt.</div>
+        <div id="levelSelectList"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="cta ghost" id="levelSelectCloseBtn" style="width:100%;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="levelCompleteModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-scroll" style="text-align:center;">
+        <div style="font-size:40px;">⭐</div>
+        <h2>Level geschafft!</h2>
+        <div class="sub" id="levelCompleteTitle"></div>
+      </div>
+      <div class="modal-footer row">
+        <button class="cta ghost" id="levelCompleteToSelectBtn">Zur Auswahl</button>
+        <button class="cta" id="levelCompleteNextBtn">Nächstes Level</button>
       </div>
     </div>
   </div>
@@ -903,6 +1224,7 @@ const ACHIEVEMENTS = {
   first_save: { icon: '💾', title: 'Saved for Later', desc: 'Save your game to this browser.' },
   parts_list: { icon: '🧾', title: 'Inventory Check', desc: 'Open the Parts List.' },
   resized: { icon: '📏', title: 'Size Matters', desc: 'Resize a Deko object.' },
+  first_measure: { icon: '📐', title: 'Measure Twice', desc: 'Use the Measure tool to check a distance.' },
 };
 const STATS_KEY = 'briqsite_stats_v1';
 let stats = { totalBriqsPlaced: 0, visitedEnvs: [] };
@@ -1505,8 +1827,9 @@ function setEnvironment(key, savedLayout) {
     scene.add(prop);
     decorProps.push(prop);
   }
-  const label = document.getElementById('envMenuLabel');
-  if (label) label.textContent = env.label;
+  // (A "current environment name" label was removed from the UI at some
+  // point — the buttons' own active-state highlighting already shows
+  // which one is selected, so there's nothing left needing this here.)
   document.querySelectorAll('#envMenuGroup .btn').forEach(b => b.classList.toggle('active', b.dataset.env === key));
 }
 setEnvironment(currentEnv);
@@ -2977,11 +3300,18 @@ function addStuds(mesh, len, crossSection, mat, studded) {
   });
 }
 
-const ghostMatValid = new THREE.MeshBasicMaterial({ color: 0x8fc79d, transparent: true, opacity: 0.55 });
+const ghostMatValid = new THREE.MeshBasicMaterial({ color: 0x8fc79d, transparent: true, opacity: 0.55, depthWrite: false });
 const removeAreaGhostGeo = new THREE.BoxGeometry(1, 1, 1);
 let removeAreaGhostMesh = null;
-const ghostMatInvalid = new THREE.MeshBasicMaterial({ color: 0xdb5b3f, transparent: true, opacity: 0.55 });
-const ghostMatPaint = new THREE.MeshBasicMaterial({ color: 0x9b7fd6, transparent: true, opacity: 0.55 });
+// depthWrite:false on these three matters beyond just looking a bit
+// nicer — ANY translucent object rendered without it can hide/occlude
+// things behind or inside it regardless of draw order, which is
+// exactly what silently broke the Small/Large area box's own per-Briq
+// red highlights: this material, shared by the ordinary single-ghost
+// preview too, had never been given this, unlike removeBoxGhostMat/
+// copyMatMark which already learned that lesson earlier.
+const ghostMatInvalid = new THREE.MeshBasicMaterial({ color: 0xdb5b3f, transparent: true, opacity: 0.55, depthWrite: false });
+const ghostMatPaint = new THREE.MeshBasicMaterial({ color: 0x9b7fd6, transparent: true, opacity: 0.55, depthWrite: false });
 const edgeMat = new THREE.LineBasicMaterial({ color: 0x2c1c0e, transparent: true, opacity: 0.5 });
 
 function cellsForBrick(anchor, lengthCells, crossCells, orientation) {
@@ -3119,6 +3449,7 @@ function placeBrick(anchor, lengthCells, orientation, mainType, studded, force, 
   brickMeshes.push(mesh);
   totalPlaced++;
   updateHud();
+  checkLevelSlotFill(cells, mainType);
   return true;
 }
 
@@ -3131,6 +3462,7 @@ function removeBrickById(id) {
   const idx = brickMeshes.indexOf(b.mesh);
   if (idx >= 0) brickMeshes.splice(idx, 1);
   updateHud();
+  checkLevelSlotReopen(b.cells);
   return true;
 }
 function removeBrickAt(cellArr) {
@@ -3150,6 +3482,8 @@ let editMode = 'briq';    // 'briq' | 'deko' — which palette/placement logic i
 let decorType = 'baum';   // current DECOR_CATALOG key, for deko mode
 let decorRotation = 0;    // pending facing angle (radians) for the NEXT Deko placement, set via the Rotate button
 let removeGridCells = 1;  // how wide an area (in fine cells) a single Remove press clears — 1 = just the targeted Briq
+let removeBoxMode = false; // Box mode replaces the single-press area entirely: drag a rectangle on the ground (like Copy), then EVERY Briq inside it at ANY height gets cleared in one go, regardless of removeGridCells.
+let removeBoxStart = null; // { x, z } in whole cells, the first marked corner of the box (null while nothing marked yet)
 let mainType = 'WS25';    // 'WS20' | 'WS25' — can be switched anytime, even mid-house
 let sizeKey = 'B50';      // which size of the current main type
 let studded = true;       // true = "mZ" (mit Zapfen), false = "oZ" (ohne Zapfen)
@@ -3189,11 +3523,25 @@ function updateBriqControlsVisibility() {
   const isSlab = isSlabType(mainType);
   const isRemove = tool === 'remove';
   const isCopy = tool === 'copy';
-  document.getElementById('briqGroupSize').style.display = (isDecor || isSlab || isRemove || isCopy) ? 'none' : '';
+  const isMeasure = tool === 'measure';
+  const isPaint = tool === 'paint';
+  document.getElementById('briqGroupSize').style.display = (isDecor || isSlab || isRemove || isCopy || isMeasure || isPaint) ? 'none' : '';
   document.getElementById('removeGridGroup').style.display = (!isDecor && isRemove) ? '' : 'none';
   document.getElementById('roofMaterialGroup').style.display = (!isDecor && mainType === 'DACH' && tool === 'place') ? '' : 'none';
   document.getElementById('copyGroup').style.display = (!isDecor && isCopy) ? '' : 'none';
-  if (!isDecor && isCopy) updateCopyStatusLabel();
+  // The colour picker also gets its own slot here, right next to the
+  // tools that actually need it — Build AND Recolour both do, since a
+  // freshly-placed Briq uses whatever colour is currently selected too
+  // — rather than only ever being reachable from a separate top-left
+  // swatch button (now removed entirely; this is its one home).
+  document.getElementById('paintGroup').style.display = (!isDecor && (isPaint || tool === 'place')) ? '' : 'none';
+  // Only relevant for the Build tool specifically — Deko's own Remove
+  // works purely by aiming and pressing, exactly like Briq Remove does,
+  // so there's nothing here for it to pick from; showing the type/size
+  // picker anyway while removing was just wasted space with nothing to
+  // actually do with it.
+  document.getElementById('decorGroupType').style.display = (isDecor && tool === 'place') ? '' : 'none';
+  if (isDecor && tool !== 'place') closeDecorSizePopup();
   // Rotate stays available in Deko mode too, and now also for Dach
   // (where it flips which axis the slope runs along) — Platte remains
   // the only case with no rotation concept of its own at all (the two
@@ -3201,7 +3549,9 @@ function updateBriqControlsVisibility() {
   // Rotate turns the whole captured clipboard 90° instead — but only
   // once there's actually something captured to turn; during the
   // two-corner marking phase it stays hidden, same as for Platte.
-  document.getElementById('rotateBtn').style.display = (isCopy ? !clipboard : mainType === 'PLATTE') ? 'none' : '';
+  // Measure has no rotation concept of its own either — two points
+  // don't have an "orientation" to flip.
+  document.getElementById('rotateBtn').style.display = (isMeasure || (isCopy ? !clipboard : mainType === 'PLATTE')) ? 'none' : '';
 }
 document.getElementById('mainTypeGroup').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-type]');
@@ -3230,8 +3580,8 @@ document.addEventListener('click', (e) => {
     panel.classList.remove('show');
   }
   const cPanel = document.getElementById('colorPanel');
-  const cBtn = document.getElementById('colorBtn');
-  if (cPanel.classList.contains('show') && !cPanel.contains(e.target) && !cBtn.contains(e.target)) {
+  const cInlineBtn = document.getElementById('colorBtnInline');
+  if (cPanel.classList.contains('show') && !cPanel.contains(e.target) && !cInlineBtn.contains(e.target)) {
     cPanel.classList.remove('show');
   }
   const mPanel = document.getElementById('menuPanel');
@@ -3257,7 +3607,7 @@ document.getElementById('infoBtn').addEventListener('click', () => {
   closeAllPopups();
   if (!isShown) panel.classList.add('show');
 });
-document.getElementById('colorBtn').addEventListener('click', () => {
+document.getElementById('colorBtnInline').addEventListener('click', () => {
   const panel = document.getElementById('colorPanel');
   const isShown = panel.classList.contains('show');
   closeAllPopups();
@@ -3283,36 +3633,51 @@ function setColorSwatchActive(hex) {
   document.querySelectorAll('#colorPanel .swatch').forEach((s) => {
     s.classList.toggle('active', (hex === null && s.id === 'colorWoodBtn') || s.dataset.color === hex);
   });
-  document.getElementById('colorSwatchDot').style.background = hex || 'linear-gradient(135deg, #c98a4b, #8a5a34)';
+  document.getElementById('colorSwatchDotInline').style.background = hex || 'linear-gradient(135deg, #c98a4b, #8a5a34)';
 }
 document.getElementById('colorWoodBtn').addEventListener('click', () => {
   brickColor = null;
   setColorSwatchActive(null);
+  document.getElementById('colorPanel').classList.remove('show'); // a click on any swatch is a complete, discrete choice — no reason to make the player close the popup themselves afterwards
 });
 document.querySelectorAll('#colorPanel .swatch[data-color]').forEach((btn) => {
   btn.addEventListener('click', () => {
     brickColor = btn.dataset.color;
     setColorSwatchActive(brickColor);
+    document.getElementById('colorPanel').classList.remove('show');
   });
 });
 document.getElementById('colorPicker').addEventListener('input', (e) => {
   brickColor = e.target.value;
   setColorSwatchActive(brickColor);
 });
+// The native colour picker's own 'input' event fires continuously while
+// still dragging inside it — closing the popup on that would yank it
+// away mid-selection. 'change' fires once, when that picker itself is
+// actually confirmed/closed, which is the right moment to close this
+// one too.
+document.getElementById('colorPicker').addEventListener('change', () => {
+  document.getElementById('colorPanel').classList.remove('show');
+});
 applyType();
 
 /* ---------------- Deko / Briq mode toggle ---------------- */
+// Every icon here is deliberately UNIQUE across the whole catalogue —
+// with the text labels now hidden (icon-only buttons, to save space),
+// two items sharing the same icon (e.g. Lamppost and Floor Lamp both
+// showing 💡) would be genuinely impossible to tell apart at a glance,
+// which text used to quietly paper over.
 const DECOR_ICONS = {
-  baum: '🌲', palme: '🌴', busch: '🌿', fels: '🪨', laterne: '💡', blumenbeet: '💐', weg: '🟫',
-  bank: '🪑', brunnen: '⛲', zaun: '🚧', muelleimer: '🗑', sonnenschirm: '⛱', liegestuhl: '🏖',
+  baum: '🌲', palme: '🌴', busch: '🌿', fels: '🪨', laterne: '🏮', blumenbeet: '💐', weg: '🟫',
+  bank: '🔶', brunnen: '⛲', zaun: '🚧', muelleimer: '🗑', sonnenschirm: '⛱', liegestuhl: '🏖',
   fass: '🛢', kiste: '📦', kaktus: '🌵', pilz: '🍄', blumentopf: '🪴', heuballen: '🌾',
-  fackel: '🔥', trittstein: '⬤', sandburg: '🏰',
+  fackel: '🕯️', trittstein: '⬤', sandburg: '🏰',
   bett: '🛏', sofa: '🛋', sessel: '💺', esstisch: '🍽', stuhl: '🪑',
   kleiderschrank: '🚪', buecherregal: '📚', kamin: '🔥', teppich: '🟥',
   stehlampe: '💡', fernseher: '📺', nachttisch: '🗄', spiegel: '🪞', badewanne: '🛁',
-  gartenzaun_klein: '🚧', gartenzaun_gross: '🧱', gartentor: '🚪', pool: '🏊',
-  grill: '🍖', gartenschaukel: '🎪', rutsche: '🛝', sandkasten: '🏖',
-  vogelhaus: '🐦', gartenwindrad: '🎐', waescheleine: '🧺', picknicktisch: '🧺',
+  gartenzaun_klein: '🔲', gartenzaun_gross: '🧱', gartentor: '⛩️', pool: '🏊',
+  grill: '🍖', gartenschaukel: '🎪', rutsche: '🛝', sandkasten: '🟨',
+  vogelhaus: '🐦', gartenwindrad: '🎐', waescheleine: '🧺', picknicktisch: '🍉',
   holzstapel: '🪵', komposter: '♻️',
 };
 const DECOR_PAGE_SIZE = 4;
@@ -3342,13 +3707,13 @@ function renderDecorTypeButtons() {
     const btn = document.createElement('button');
     btn.className = 'btn' + (k === decorType ? ' active' : '');
     btn.dataset.decor = k;
-    // A type with size variants shows which one is currently selected
-    // right in its own label (e.g. "Lamppost (S)") — the only feedback
-    // needed for "did my size choice actually stick", without a whole
-    // extra badge/overlay just for that.
+    btn.title = v.label; // no text label on the button itself any more (saves space) — still available as a hover/long-press tooltip
+    // A type with size variants still shows which one is currently
+    // selected — as a small letter badge in the corner instead of a
+    // text label, now that the label itself is gone.
     const variants = DECOR_SIZE_VARIANTS[k];
-    const sizeTag = variants ? ` (${DECOR_SIZE_LABELS[decorSizeByType[k] || 1]})` : '';
-    btn.innerHTML = `${DECOR_ICONS[k] || '❖'}<small>${v.label}${sizeTag}</small>`;
+    const sizeTag = variants ? `<small>${DECOR_SIZE_LABELS[decorSizeByType[k] || 1]}</small>` : '';
+    btn.innerHTML = `${DECOR_ICONS[k] || '❖'}${sizeTag}`;
     group.appendChild(btn);
   });
   document.getElementById('decorPageLabel').textContent = `${decorPage + 1}/${pageCount}`;
@@ -3426,14 +3791,30 @@ function closeDecorSizePopup() {
 document.getElementById('decorSizePopupCloseBtn').addEventListener('click', closeDecorSizePopup);
 function applyEditMode() {
   const isDecor = editMode === 'deko';
-  document.getElementById('decorGroupType').style.display = isDecor ? '' : 'none';
   document.getElementById('typeMenuBtn').style.display = isDecor ? 'none' : '';
-  document.getElementById('colorBtn').style.display = isDecor ? 'none' : ''; // colour only applies to Briqs
   document.getElementById('typeMenuPanel').classList.remove('show');
   document.getElementById('colorPanel').classList.remove('show');
   closeDecorSizePopup();
+  // Deko objects can only ever be placed or removed — Recolour, Copy,
+  // and Measure all work on Briqs specifically, so none of them do
+  // anything useful here. Hidden rather than merely disabled, and if
+  // one of them happened to be the active tool already, this falls
+  // back to Build so there's never a hidden tool still silently active
+  // underneath (mirrors the existing rule the other way round: picking
+  // Copy while already in Deko mode kicks back OUT to Briq mode
+  // instead, since Copy has nowhere sensible to fall back to on its
+  // own).
+  document.getElementById('toolPaint').style.display = isDecor ? 'none' : '';
+  document.getElementById('toolCopy').style.display = isDecor ? 'none' : '';
+  document.getElementById('toolMeasure').style.display = isDecor ? 'none' : '';
+  if (isDecor && (tool === 'paint' || tool === 'copy' || tool === 'measure')) setTool('place');
   updateBriqControlsVisibility();
-  document.getElementById('modeToggleBtn').classList.toggle('active', isDecor);
+  // Deliberately NOT toggling an "active" look here — the button's own
+  // label/icon already flips to say "Briqs" (with the Briq trowel icon)
+  // while in Deko mode, meaning it's offering to SWITCH you back, not
+  // showing you where you already are. Styling it as visually "active"
+  // at the same time read as contradictory: a highlighted button
+  // labelled "Briqs" while you're actually in Deko mode.
   document.getElementById('modeToggleLabel').textContent = isDecor ? 'Briqs' : 'Deco';
   document.getElementById('modeToggleIcon').textContent = isDecor ? '🧱' : '🌳';
   updateActionBtnLabel();
@@ -3444,17 +3825,12 @@ document.getElementById('modeToggleBtn').addEventListener('click', () => {
 });
 applyEditMode();
 
-// The build/Deko panel's own collapse toggle — hides every tool/type row
-// beneath a persistent "Menu" handle that's never itself hidden, so the
-// panel never fully vanishes into confusion. Mainly there to free up
-// space (the panel has grown a lot with Save/Load, categories, etc.)
-// rather than block the movement joystick's own vertically-centred zone
-// on a short screen.
+// See #buildPanelToggleBtn's own CSS comment for why this exists.
 let buildPanelCollapsed = false;
 function setBuildPanelCollapsed(v) {
   buildPanelCollapsed = v;
   document.getElementById('buildPanel').classList.toggle('collapsed', v);
-  document.getElementById('buildPanelToggleBtn').textContent = v ? '\u25b2 Menu' : '\u25bc Menu';
+  document.getElementById('buildPanelToggleBtn').textContent = v ? '\u25b6' : '\u25c0';
 }
 document.getElementById('buildPanelToggleBtn').addEventListener('click', () => setBuildPanelCollapsed(!buildPanelCollapsed));
 
@@ -3462,10 +3838,13 @@ document.getElementById('toolPlace').addEventListener('click', () => setTool('pl
 document.getElementById('toolRemove').addEventListener('click', () => setTool('remove'));
 document.getElementById('toolPaint').addEventListener('click', () => setTool('paint'));
 document.getElementById('toolCopy').addEventListener('click', () => setTool('copy'));
+document.getElementById('toolMeasure').addEventListener('click', () => setTool('measure'));
 document.getElementById('removeGridButtons').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-grid]');
   if (!btn) return;
-  removeGridCells = parseInt(btn.dataset.grid, 10);
+  removeBoxMode = btn.dataset.grid === 'box';
+  removeBoxStart = null; // switching between grid-size and box mode always starts clean, same as switching tools does
+  if (!removeBoxMode) removeGridCells = parseInt(btn.dataset.grid, 10);
   document.querySelectorAll('#removeGridButtons .btn').forEach((b) => b.classList.toggle('active', b === btn));
 });
 document.getElementById('roofMaterialButtons').addEventListener('click', (e) => {
@@ -3477,9 +3856,10 @@ document.getElementById('roofMaterialButtons').addEventListener('click', (e) => 
 function updateActionBtnLabel() {
   const ab = document.getElementById('actionBtn');
   ab.classList.remove('remove', 'paint');
-  if (tool === 'remove') { ab.textContent = 'REMOVE'; ab.classList.add('remove'); return; }
+  if (tool === 'remove') { ab.textContent = (removeBoxMode ? (removeBoxStart ? 'CLEAR' : 'MARK') : 'REMOVE'); ab.classList.add('remove'); return; }
   if (tool === 'paint') { ab.textContent = 'PAINT'; ab.classList.add('paint'); return; }
   if (tool === 'copy') { ab.textContent = clipboard ? 'PASTE' : (copyStart ? 'CORNER' : 'MARK'); return; }
+  if (tool === 'measure') { ab.textContent = !measureStart ? 'MARK' : (!measureEnd ? 'MEASURE' : 'NEW'); return; }
   ab.textContent = (isSlabType(mainType) && editMode === 'briq') ? 'CORNER' : 'BUILD';
 }
 function updateCrosshairIcon() {
@@ -3502,13 +3882,24 @@ function triggerCrosshairSwing(kind) {
   el.classList.add(cls);
 }
 function setTool(t) {
+  // Leaving Copy always clears whatever was captured — coming back to
+  // it later starts fresh with a new area to mark, rather than quietly
+  // resuming a stale clipboard from a completely different point in the
+  // session.
+  if (tool === 'copy' && t !== 'copy') clearClipboard();
   tool = t;
   slabStart = null; roofStart = null; copyStart = null; // switching tools cancels any half-marked corner
+  clearCopyAreaHighlights(); // ...and any in-progress copy-area highlight along with it
+  clearMeasurement(); // ...and any in-progress measurement along with them
+  removeBoxStart = null; // ...and any half-marked Remove-box corner too
+  if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+  clearRemoveBoxHighlights();
   clearDragRowPreview(); // ...and any in-progress build-row preview along with them
   document.getElementById('toolPlace').classList.toggle('active', t === 'place');
   document.getElementById('toolRemove').classList.toggle('active', t === 'remove');
   document.getElementById('toolPaint').classList.toggle('active', t === 'paint');
   document.getElementById('toolCopy').classList.toggle('active', t === 'copy');
+  document.getElementById('toolMeasure').classList.toggle('active', t === 'measure');
   // Copy only ever operates on Briqs — force Briq mode so the tool
   // never sits active while looking at the Deko palette instead.
   if (t === 'copy' && editMode === 'deko') { editMode = 'briq'; applyEditMode(); }
@@ -3887,7 +4278,7 @@ function endAction() {
 // logic either way, just two different input sources triggering it.
 function beginAction() {
   startHoldSession();
-  if (tool === 'remove') {
+  if (tool === 'remove' && !removeBoxMode) {
     doAction(); // exactly one removal PASS (one Briq, or one whole grid-area batch), always, on the press itself
     actionBtnEl.classList.add('arming');
     const startedAt = performance.now();
@@ -3957,10 +4348,20 @@ let lastLen = brickLen, lastOrient = orientation, lastTool = tool, lastMainType 
 function raycastAim() {
   const ndc = (mode === 'fp' && touchUI) ? { x: 0, y: 0 } : aimNDC;
   raycaster.setFromCamera(ndc, camera);
-  // Remove and Recolour both target an EXISTING Briq directly, never bare
-  // ground — Build is the only case that also needs the ground plane
-  // itself as a fallback target.
-  const targets = (tool === 'remove' || tool === 'paint') ? brickMeshes : [ground, ...brickMeshes];
+  // Recolour, and a precise single-target Remove ("Single"), both aim
+  // at an EXISTING Briq directly, never bare ground — there's nothing
+  // sensible to recolour or remove-exactly-one-of if nothing's there
+  // yet. A wider-AREA Remove ("Small"/"Large"), and Box mode, are
+  // different: the whole point of both is to always show the clearing
+  // area and take out whatever happens to be inside it, so — like
+  // Build — they need the ground as a fallback target too, not just
+  // existing Briqs. Box mode must check its OWN flag here, not just
+  // removeGridCells: switching TO Box doesn't reset removeGridCells (it
+  // simply isn't relevant to Box mode at all), so a leftover "Single"
+  // (=== 1) value from before switching would otherwise still block the
+  // ground fallback Box just as urgently needs.
+  const needsGroundFallback = !(tool === 'paint' || (tool === 'remove' && !removeBoxMode && removeGridCells === 1));
+  const targets = needsGroundFallback ? [ground, ...brickMeshes] : brickMeshes;
   const hits = raycaster.intersectObjects(targets, false);
   return hits[0] || null;
 }
@@ -4272,6 +4673,7 @@ function placeBrickWithUndo(anchor, lengthCells, orientation, mt, studdedVal, fo
     pushUndo(() => removeBrickAt(bricks.get(placedId).cells[0]));
     playPlaceSound(anchor[1] === 0);
     recordBriqsPlaced(1);
+    notifyTutorial('build');
   }
   return ok;
 }
@@ -4284,6 +4686,7 @@ function removeBrickWithUndo(cellArr) {
     pushUndo(() => restoreBrickFromCapture(captured));
     playRemoveSound();
     unlockAchievement('first_remove');
+    notifyTutorial('remove');
   }
   return ok;
 }
@@ -4319,6 +4722,40 @@ function removeAreaAt(targetCell, gridCells) {
     pushUndo(() => { for (const d of removedData) restoreBrickFromCapture(d); });
     playRemoveSound();
     unlockAchievement('first_remove');
+    notifyTutorial('remove');
+  }
+  return removedData.length;
+}
+// Box mode: an X/Z rectangle marked with the SAME two-click drag Copy
+// already uses, but clearing EVERY Briq inside it at ANY height at all
+// — courses aren't locked to whatever the crosshair happened to be
+// aimed at, unlike the ordinary Small/Large area press. Whichever
+// footprint corner a Briq's own anchor cell sits in decides whether
+// it's "inside" the box; a piece is never partially cleared.
+function removeBoxArea(x0, x1, z0, z1) {
+  const idsToRemove = new Set();
+  for (const [id, b] of bricks) {
+    const fp = b.footprint;
+    // Any overlap between the brick's OWN footprint and the box counts
+    // — a big piece only partially inside the drawn box still gets
+    // removed as a whole, never left half-clipped. (x1/z1 here are
+    // EXCLUSIVE bounds, matching the same convention Copy's own
+    // two-corner box already uses.)
+    if (fp.x1 >= x0 && fp.x0 < x1 && fp.z1 >= z0 && fp.z0 < z1) idsToRemove.add(id);
+  }
+  if (idsToRemove.size === 0) return 0;
+  const removedData = [];
+  for (const id of idsToRemove) {
+    const b = bricks.get(id);
+    if (!b) continue;
+    removedData.push(captureBrickForUndo(b));
+    removeBrickAt(b.cells[0]);
+  }
+  if (removedData.length) {
+    pushUndo(() => { for (const d of removedData) restoreBrickFromCapture(d); });
+    playRemoveSound();
+    unlockAchievement('first_remove');
+    notifyTutorial('remove');
   }
   return removedData.length;
 }
@@ -4329,6 +4766,7 @@ function doSlabFillWithUndo(x0, x1, z0, z1, y, mt, colorVal) {
     playPlaceSound(y === 0);
     recordBriqsPlaced(1);
     unlockAchievement('first_platte');
+    notifyTutorial('build');
   }
   return id !== null ? 1 : 0;
 }
@@ -4363,6 +4801,7 @@ function doPaintAction() {
   b.color = newColor;
   triggerCrosshairSwing('paint');
   unlockAchievement('first_recolour');
+  notifyTutorial('recolour');
   pushUndo(() => {
     const revertMat = getMat(oldColor);
     b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
@@ -4391,6 +4830,7 @@ function doDecorAction() {
     playRemoveSound();
     triggerCrosshairSwing('remove');
     unlockAchievement('first_remove');
+    notifyTutorial('remove');
   }
 }
 
@@ -4407,6 +4847,7 @@ function updateAimAndGhost() {
     ghostMesh.visible = false;
     currentAnchor = null;
     if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
+    clearRemoveBoxHighlights();
     if (hit && hit.face) {
       const crossCells = BRIQ_CATALOG[mainType].crossCells;
       const anchor = computeAnchorFromHit(hit, mainType, brickLen, orientation);
@@ -4430,35 +4871,78 @@ function updateAimAndGhost() {
     ghostMesh.visible = false;
     currentTargetCell = null;
     if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
-    if (hit && hit.object && hit.object.userData && hit.object.userData.brickId) {
-      const b = bricks.get(hit.object.userData.brickId);
-      if (b) {
-        currentTargetCell = b.cells[0];
-        if (tool === 'remove' && removeGridCells > 1) {
-          // A wide box outlining the whole area this press would clear,
-          // instead of just highlighting the one Briq under the
-          // crosshair — showing exactly what's about to disappear before
-          // committing to it.
-          const [tx, ty, tz] = b.cells[0];
+    clearRemoveBoxHighlights();
+    if (tool === 'remove' && removeGridCells > 1) {
+      // Area mode (Small/Large): always show the clearing box, wherever
+      // the crosshair currently is — over an existing Briq (using its
+      // own course) OR bare ground (course 0) — so the whole area is
+      // visible before there's necessarily anything built there yet to
+      // aim at directly. removeAreaAt itself already clears whatever
+      // happens to fall inside this box at that course, regardless of
+      // whether the exact centre cell has anything in it.
+      if (hit) {
+        let tx, ty, tz, courseH;
+        if (hit.object === ground) {
+          tx = Math.round(hit.point.x / CELL_M);
+          ty = 0;
+          tz = Math.round(hit.point.z / CELL_M);
+          courseH = BRIQ_CATALOG[mainType].crossCells; // no specific brick here — the box's own height just follows the currently-selected type
+        } else if (hit.object.userData && hit.object.userData.brickId) {
+          const b = bricks.get(hit.object.userData.brickId);
+          if (b) {
+            [tx, ty, tz] = b.cells[0];
+            courseH = BRIQ_CATALOG[b.mainType].crossCells;
+          }
+        }
+        if (tx !== undefined) {
+          currentTargetCell = [tx, ty, tz];
           const half = Math.floor(removeGridCells / 2);
           const xMin = tx - half, xMax = tx + (removeGridCells - half - 1);
           const zMin = tz - half, zMax = tz + (removeGridCells - half - 1);
-          const courseH = BRIQ_CATALOG[b.mainType].crossCells;
           const w = (xMax - xMin + 1) * CELL_M, d = (zMax - zMin + 1) * CELL_M, h = courseH * CELL_M;
           if (!removeAreaGhostMesh) removeAreaGhostMesh = new THREE.Mesh(removeAreaGhostGeo, ghostMatInvalid);
+          removeAreaGhostMesh.renderOrder = 1; // drawn BEFORE the per-Briq highlights below, matching Box mode's own explicit ordering rather than relying on both defaulting to 0
           removeAreaGhostMesh.scale.set(w, h, d);
           removeAreaGhostMesh.position.set(
             (xMin + xMax + 1) / 2 * CELL_M, (ty + courseH / 2) * CELL_M, (zMin + zMax + 1) / 2 * CELL_M,
           );
           scene.add(removeAreaGhostMesh);
-        } else {
-          // highlight whole brick — red for Remove, violet for Recolour
-          ghostMesh.geometry = hit.object.geometry;
-          ghostMesh.position.copy(hit.object.position);
-          ghostMesh.rotation.copy(hit.object.rotation);
-          ghostMesh.material = tool === 'paint' ? ghostMatPaint : ghostMatInvalid;
-          ghostMesh.visible = true;
+
+          // Individually highlight every Briq that would ACTUALLY be
+          // cleared — the same per-Briq red overlay Box mode already
+          // uses, checked against exactly what removeAreaAt itself
+          // looks at (occupancy at this one course, y=ty, across the
+          // whole X/Z range) rather than only a generic area-wide tint.
+          const idsToHighlight = new Set();
+          for (let x = xMin; x <= xMax; x++) {
+            for (let z = zMin; z <= zMax; z++) {
+              const id = occupancy.get(key(x, ty, z));
+              if (id !== undefined) idsToHighlight.add(id);
+            }
+          }
+          for (const id of idsToHighlight) {
+            const b = bricks.get(id);
+            if (!b) continue;
+            const hl = new THREE.Mesh(b.mesh.geometry, removeBoxHighlightMat);
+            hl.position.copy(b.mesh.position);
+            hl.rotation.copy(b.mesh.rotation);
+            hl.scale.copy(b.mesh.scale);
+            hl.renderOrder = 2;
+            scene.add(hl);
+            removeBoxHighlightMeshes.push(hl);
+          }
         }
+      }
+    } else if (hit && hit.object && hit.object.userData && hit.object.userData.brickId) {
+      const b = bricks.get(hit.object.userData.brickId);
+      if (b) {
+        currentTargetCell = b.cells[0];
+        // highlight whole brick — red for Remove, violet for Recolour
+        ghostMesh.geometry = hit.object.geometry;
+        ghostMesh.position.copy(hit.object.position);
+        ghostMesh.rotation.copy(hit.object.rotation);
+        ghostMesh.material = tool === 'paint' ? ghostMatPaint : ghostMatInvalid;
+        ghostMesh.visible = true;
       }
     }
   }
@@ -4816,18 +5300,7 @@ function computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis) {
   const geoDimZ = slopeAxis === 'x' ? widthMeters : slantLen;
   return { position, rotation, slantLen, thickness, widthMeters, geoDimX, geoDimZ };
 }
-function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force) {
-  const crossCells = BRIQ_CATALOG.DACH.crossCells;
-  const yMin = Math.min(yLow, yHigh), yMax = Math.max(yLow, yHigh);
-  // Occupancy is checked PER COLUMN at the panel's own interpolated
-  // slope height there — not a full rectangular prism from yMin to
-  // yMax across the whole footprint. A prism check would collide with
-  // the TALLER of the two supporting walls' own body: that wall's cells
-  // between yMin and its own top are legitimately occupied by the wall
-  // itself, even though the roof is meant to rest ON TOP of it, not
-  // overlap it. Following the actual slope avoids that false collision
-  // while still correctly blocking anything that really is in the
-  // panel's own way.
+function roofCellsFor(x0, x1, z0, z1, yLow, yHigh, slopeAxis, crossCells) {
   const lowAlong = slopeAxis === 'x' ? x0 : z0;
   const highAlong = slopeAxis === 'x' ? x1 : z1;
   const alongSpan = highAlong - lowAlong;
@@ -4840,6 +5313,21 @@ function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force)
       for (let dy = 0; dy < crossCells; dy++) cells.push([x, hAtPos + dy, z]);
     }
   }
+  return cells;
+}
+function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force) {
+  const crossCells = BRIQ_CATALOG.DACH.crossCells;
+  const yMin = Math.min(yLow, yHigh), yMax = Math.max(yLow, yHigh);
+  // Occupancy is checked PER COLUMN at the panel's own interpolated
+  // slope height there — not a full rectangular prism from yMin to
+  // yMax across the whole footprint. A prism check would collide with
+  // the TALLER of the two supporting walls' own body: that wall's cells
+  // between yMin and its own top are legitimately occupied by the wall
+  // itself, even though the roof is meant to rest ON TOP of it, not
+  // overlap it. Following the actual slope avoids that false collision
+  // while still correctly blocking anything that really is in the
+  // panel's own way.
+  const cells = roofCellsFor(x0, x1, z0, z1, yLow, yHigh, slopeAxis, crossCells);
   if (!force && !cellsFree(cells)) return null;
 
   const t = computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis);
@@ -5241,6 +5729,446 @@ document.getElementById('achievementsModal').addEventListener('click', (e) => {
   if (e.target && e.target.id === 'achievementsModal') closeAchievementsModal();
 });
 
+/* ---------------- Levels (guided build challenges) ---------------- */
+// A level is just DATA — a name plus a list of "slots", each shaped
+// exactly like the arguments placeBrick() itself already takes (anchor
+// cell + length + orientation + type). Levels live in their own
+// dedicated patch of the world, well clear of the origin where a
+// player's own freeform build normally starts, so entering or leaving a
+// level never has to touch — or even know about — anything already
+// built. Rewards are kept deliberately simple for now (a star per
+// completed level, like an achievement), matching what the tutorial and
+// achievements systems already do rather than introducing a whole new
+// currency.
+const LEVELS_KEY = 'briqsite_levels_v1';
+let levelStars = {}; // level id -> true, once completed
+try {
+  const savedL = JSON.parse(localStorage.getItem(LEVELS_KEY) || '{}');
+  if (savedL && typeof savedL === 'object') levelStars = savedL;
+} catch (e) { /* nothing persists this session, but nothing throws either */ }
+function saveLevelStars() {
+  try { localStorage.setItem(LEVELS_KEY, JSON.stringify(levelStars)); } catch (e) { /* best-effort */ }
+}
+
+// World bounds are only ±CELL_BOUND (360 cells / 18m) — 400 would have
+// sat outside them entirely, making every slot in every level literally
+// unplaceable. 150 cells (7.5m) is still comfortably clear of a typical
+// freeform build near the origin while safely inside the buildable area
+// even for the widest level's full extent.
+const LEVEL_ZONE_X = 150; // fine cells east of the origin
+const LEVELS = [
+  {
+    id: 'lvl1', name: 'Level 1: Erste Reihe', desc: 'Baue eine gerade Reihe aus drei WS25B50-Briqs.',
+    slots: [
+      { anchor: [LEVEL_ZONE_X + 0, 0, 0], lengthCells: 10, orientation: 'x', mainType: 'WS25' },
+      { anchor: [LEVEL_ZONE_X + 10, 0, 0], lengthCells: 10, orientation: 'x', mainType: 'WS25' },
+      { anchor: [LEVEL_ZONE_X + 20, 0, 0], lengthCells: 10, orientation: 'x', mainType: 'WS25' },
+    ],
+  },
+  {
+    id: 'lvl2', name: 'Level 2: Kleine Wand', desc: 'Baue eine zweistöckige Wand aus WS25B50-Briqs.',
+    slots: [
+      { anchor: [LEVEL_ZONE_X + 0, 0, 20], lengthCells: 10, orientation: 'x', mainType: 'WS25' },
+      { anchor: [LEVEL_ZONE_X + 10, 0, 20], lengthCells: 10, orientation: 'x', mainType: 'WS25' },
+      { anchor: [LEVEL_ZONE_X + 0, 5, 20], lengthCells: 10, orientation: 'x', mainType: 'WS25' },
+      { anchor: [LEVEL_ZONE_X + 10, 5, 20], lengthCells: 10, orientation: 'x', mainType: 'WS25' },
+    ],
+  },
+  {
+    id: 'lvl3', name: 'Level 3: Gemischte Größen', desc: 'Kombiniere eine lange und zwei kurze WS25-Briqs.',
+    slots: [
+      { anchor: [LEVEL_ZONE_X + 0, 0, 40], lengthCells: 40, orientation: 'x', mainType: 'WS25' },
+      { anchor: [LEVEL_ZONE_X + 0, 5, 40], lengthCells: 5, orientation: 'x', mainType: 'WS25' },
+      { anchor: [LEVEL_ZONE_X + 5, 5, 40], lengthCells: 5, orientation: 'x', mainType: 'WS25' },
+    ],
+  },
+];
+
+function levelCellsKey(cells) { return cells.map(c => c.join(',')).sort().join('|'); }
+function slotCells(slot) {
+  const crossCells = BRIQ_CATALOG[slot.mainType].crossCells;
+  return cellsForBrick(slot.anchor, slot.lengthCells, crossCells, slot.orientation);
+}
+
+const levelGhostMat = new THREE.LineBasicMaterial({ color: 0x5fa8d6, transparent: true, opacity: 0.85 });
+let activeLevel = null; // { def, filled: Set<number>, ghosts: Map<number, THREE.LineSegments> }
+
+// Reuses the same geometry helper real Briqs are built from, so a slot's
+// outline is guaranteed to be pixel-for-pixel the shape/size of the Briq
+// that's meant to go there — just drawn as a wireframe instead of a
+// solid mesh, via the same edges-from-geometry trick placed Briqs
+// already use for their own crisp corner lines.
+function buildSlotGhost(slot) {
+  const crossCells = BRIQ_CATALOG[slot.mainType].crossCells;
+  const geo = getBrickGeo(slot.mainType, slot.lengthCells);
+  const fp = footprintOf(slot.anchor, slot.lengthCells, crossCells, slot.orientation);
+  const c = brickCenterWorld(fp);
+  const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geo), levelGhostMat);
+  wire.position.set(c[0], c[1], c[2]);
+  if (slot.orientation === 'z') wire.rotation.y = Math.PI / 2;
+  return wire;
+}
+function clearActiveLevelGhosts() {
+  if (!activeLevel) return;
+  activeLevel.ghosts.forEach((mesh) => scene.remove(mesh));
+  activeLevel.ghosts.clear();
+}
+// Every level starts from a genuinely blank world — not just its own
+// zone — so there's never old debris (mismatched attempts, or the
+// player's own freeform build) lying around to confuse what's part of
+// THIS level's structure. That's destructive and irreversible, so it's
+// gated on an explicit confirmation — but as an in-game modal, not the
+// browser's native confirm(): a native dialog is what was silently
+// kicking the player straight out of fullscreen every time (a browser
+// dialog forces the browser chrome back on top, and exiting fullscreen
+// is simply part of how that's implemented) — none of the OTHER
+// confirm()-gated actions (Reset, deleting/overwriting a save) trigger
+// that same fullscreen-exit complaint, so this is scoped to just here.
+//
+// The confirmation itself is skipped entirely when a level is ALREADY
+// active (e.g. pressing "Next Level" right after completing one) —
+// there's nothing to lose warning about, since the world was already
+// wiped clean the moment the current level started. It only matters
+// the FIRST time, coming in from freeform building.
+let pendingLevelStart = null;
+function startLevel(levelDef) {
+  if (activeLevel) { reallyStartLevel(levelDef); return; }
+  pendingLevelStart = levelDef;
+  document.getElementById('levelStartConfirmModal').style.display = 'flex';
+}
+function cancelLevelStart() {
+  pendingLevelStart = null;
+  document.getElementById('levelStartConfirmModal').style.display = 'none';
+}
+function confirmLevelStart() {
+  const levelDef = pendingLevelStart;
+  pendingLevelStart = null;
+  document.getElementById('levelStartConfirmModal').style.display = 'none';
+  if (!levelDef) return;
+  reallyStartLevel(levelDef);
+}
+function reallyStartLevel(levelDef) {
+  exitLevel(); // clears any leftover ghost outlines from a previous level session
+  resetGame(); // wipes every Briq/Deko in the world and the undo history
+  activeLevel = { def: levelDef, filled: new Set(), ghosts: new Map() };
+  levelDef.slots.forEach((slot, i) => {
+    const mesh = buildSlotGhost(slot);
+    activeLevel.ghosts.set(i, mesh);
+    scene.add(mesh);
+  });
+  const first = levelDef.slots[0];
+  const fp = footprintOf(first.anchor, first.lengthCells, BRIQ_CATALOG[first.mainType].crossCells, first.orientation);
+  focusOn([fp.x0 * CELL_M + 1, fp.z0 * CELL_M + 3]);
+  updateLevelHud();
+  document.getElementById('levelHud').style.display = 'flex';
+}
+document.getElementById('levelStartConfirmCancelBtn').addEventListener('click', cancelLevelStart);
+document.getElementById('levelStartConfirmYesBtn').addEventListener('click', confirmLevelStart);
+document.getElementById('levelStartConfirmModal').addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'levelStartConfirmModal') cancelLevelStart();
+});
+function exitLevel() {
+  clearActiveLevelGhosts();
+  activeLevel = null;
+  document.getElementById('levelHud').style.display = 'none';
+}
+function updateLevelHud() {
+  if (!activeLevel) return;
+  document.getElementById('levelHudTitle').textContent = activeLevel.def.name;
+  document.getElementById('levelHudProgress').textContent = `${activeLevel.filled.size} / ${activeLevel.def.slots.length}`;
+}
+// Called right after a Briq is successfully placed, with the exact cell
+// list it now occupies — checked against every still-open slot rather
+// than the other way around, since there's normally only a handful of
+// open slots at once and recomputing one slot's own cells on demand is
+// cheap.
+function checkLevelSlotFill(cells, mainType) {
+  if (!activeLevel) return;
+  const newKey = levelCellsKey(cells);
+  activeLevel.def.slots.forEach((slot, i) => {
+    if (activeLevel.filled.has(i) || slot.mainType !== mainType) return;
+    if (levelCellsKey(slotCells(slot)) !== newKey) return;
+    activeLevel.filled.add(i);
+    const ghost = activeLevel.ghosts.get(i);
+    if (ghost) { scene.remove(ghost); activeLevel.ghosts.delete(i); }
+    updateLevelHud();
+    if (activeLevel.filled.size === activeLevel.def.slots.length) completeLevel();
+  });
+}
+// The mirror case: removing a Briq that had filled a slot re-opens that
+// slot (its ghost frame comes back) instead of leaving it silently
+// marked done with nothing actually there.
+function checkLevelSlotReopen(cells) {
+  if (!activeLevel) return;
+  const removedKey = levelCellsKey(cells);
+  activeLevel.def.slots.forEach((slot, i) => {
+    if (!activeLevel.filled.has(i)) return;
+    if (levelCellsKey(slotCells(slot)) !== removedKey) return;
+    activeLevel.filled.delete(i);
+    const mesh = buildSlotGhost(slot);
+    activeLevel.ghosts.set(i, mesh);
+    scene.add(mesh);
+    updateLevelHud();
+  });
+}
+function completeLevel() {
+  levelStars[activeLevel.def.id] = true;
+  saveLevelStars();
+  document.getElementById('levelCompleteTitle').textContent = activeLevel.def.name;
+  const idx = LEVELS.findIndex((l) => l.id === activeLevel.def.id);
+  document.getElementById('levelCompleteNextBtn').style.display = (idx >= 0 && idx < LEVELS.length - 1) ? '' : 'none';
+  document.getElementById('levelCompleteModal').style.display = 'flex';
+}
+function renderLevelSelectList() {
+  const list = document.getElementById('levelSelectList');
+  list.innerHTML = '';
+  LEVELS.forEach((lvl, i) => {
+    const done = !!levelStars[lvl.id];
+    const tile = document.createElement('button');
+    tile.className = 'level-tile' + (done ? ' done' : '');
+    tile.title = lvl.name; // the full name isn't shown on the tile itself any more, but stays reachable as a hover tooltip
+    const number = document.createElement('div');
+    number.className = 'level-tile-number';
+    number.textContent = String(i + 1);
+    const star = document.createElement('div');
+    star.className = 'level-tile-star';
+    star.textContent = done ? '⭐' : '☆';
+    tile.appendChild(number); tile.appendChild(star);
+    tile.addEventListener('click', () => { closeLevelSelectModal(); startLevel(lvl); });
+    list.appendChild(tile);
+  });
+}
+function openLevelSelectModal() {
+  renderLevelSelectList();
+  document.getElementById('levelSelectModal').style.display = 'flex';
+}
+function closeLevelSelectModal() { document.getElementById('levelSelectModal').style.display = 'none'; }
+document.getElementById('levelsBtn').addEventListener('click', () => {
+  document.getElementById('menuPanel').classList.remove('show');
+  openLevelSelectModal();
+});
+document.getElementById('levelSelectCloseBtn').addEventListener('click', closeLevelSelectModal);
+document.getElementById('levelSelectModal').addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'levelSelectModal') closeLevelSelectModal();
+});
+document.getElementById('levelCompleteToSelectBtn').addEventListener('click', () => {
+  document.getElementById('levelCompleteModal').style.display = 'none';
+  exitLevel();
+  openLevelSelectModal();
+});
+document.getElementById('levelCompleteNextBtn').addEventListener('click', () => {
+  document.getElementById('levelCompleteModal').style.display = 'none';
+  const idx = LEVELS.findIndex((l) => l.id === activeLevel.def.id);
+  const next = LEVELS[idx + 1];
+  if (next) startLevel(next); else { exitLevel(); openLevelSelectModal(); }
+});
+document.getElementById('levelHudExitBtn').addEventListener('click', exitLevel);
+
+/* ---------------- Tutorial (mascot walkthrough) ---------------- */
+// Persisted per-browser (localStorage), same pattern as the control-mode
+// preference and achievements — a first-run walkthrough is about THIS
+// player's own progress, not the build, so it stays out of the save
+// file entirely.
+const TUTORIAL_KEY = 'briqsite_tutorial_done_v1';
+const TUTORIAL_STEPS = [
+  {
+    id: 'welcome',
+    text: () => 'Hi, I\u2019m Briq! Let\u2019s learn the basics together \u2014 it only takes a minute.',
+    waitFor: null,
+  },
+  {
+    id: 'build',
+    text: () => touchUI
+      ? 'First: tap the big round button to place a Briq right in front of you.'
+      : 'First: left-click anywhere in front of you to place a Briq.',
+    waitFor: 'build',
+  },
+  {
+    id: 'recolour',
+    // The exact wording here is only ever the FALLBACK shown for a
+    // split second before updateTutorialUI() below picks the correct
+    // one of its three actual phases (switch tool / aim / press) —
+    // recolouring a Briq genuinely isn't one single action, and no
+    // single static sentence could describe all three without being
+    // vague about at least one of them.
+    text: () => 'Let\u2019s add some colour to that Briq.',
+    waitFor: 'recolour',
+  },
+  {
+    id: 'remove',
+    // Comes AFTER recolour deliberately — the Briq built in the
+    // previous step needs to still exist to be recoloured, so removing
+    // it has to be the LAST of the three, not the second (it used to be
+    // build \u2192 remove \u2192 recolour, which left nothing behind to
+    // recolour by the third step).
+    text: () => 'Now let\u2019s remove that Briq.',
+    waitFor: 'remove',
+  },
+  {
+    id: 'closing',
+    text: () => 'That\u2019s the basics! There\u2019s also Deko, Platte/Dach, and Copy to discover \u2014 check \ud83c\udfc6 Achievements for ideas any time, and \u2699\ufe0f Settings if you want to change controls. Have fun building!',
+    waitFor: null,
+  },
+];
+let tutorialActive = false;
+let tutorialStepIndex = 0;
+let tutorialWaitingFor = null;
+// Every real <button> the tutorial is willing to enable/disable on a
+// per-step (or per-phase) basis — deliberately NOT movement (joystick,
+// fly buttons, WASD, look-drag: the player always needs to be able to
+// walk/look around to aim, no matter what step they're on) and NOT
+// actionBtn (a plain element, not a real <button> — and it's already
+// self-guarded
+// by its own validity checks, so pressing it with nothing valid to act
+// on is already a harmless no-op without needing to be hard-disabled).
+const TUTORIAL_MANAGED_BUTTON_IDS = [
+  'modeToggleBtn', 'typeMenuBtn', 'colorBtnInline',
+  'undoBtn', 'achievementsBtn', 'shareBtn', 'fullscreenBtn', 'infoBtn', 'menuBtn',
+  'toolPlace', 'toolRemove', 'toolPaint', 'toolCopy',
+];
+function tutorialDoneBefore() {
+  try { return localStorage.getItem(TUTORIAL_KEY) === 'done'; } catch (e) { return false; }
+}
+function markTutorialDone() {
+  try { localStorage.setItem(TUTORIAL_KEY, 'done'); } catch (e) { /* best-effort */ }
+}
+// Disables every managed button NOT in the given list, and re-enables
+// every one that IS — always the full list both ways, so a button
+// disabled two steps ago can never get left stuck that way by mistake.
+// Uses the native `disabled` attribute rather than any CSS z-index or
+// click-interception trick: a real browser already refuses to fire
+// click/pointer events on a disabled button, full stop, so there's
+// nothing left to get wrong the way stacking contexts or manual event
+// blocking already did.
+function setTutorialButtonsEnabled(enabledIds) {
+  for (const id of TUTORIAL_MANAGED_BUTTON_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !enabledIds.includes(id);
+  }
+}
+let tutorialHandTargetId = null;
+function setTutorialHandTarget(id) {
+  tutorialHandTargetId = id;
+  const hand = document.getElementById('tutorialHand');
+  const el = id ? document.getElementById(id) : null;
+  if (!el) { hand.style.display = 'none'; return; }
+  const r = el.getBoundingClientRect();
+  hand.style.left = (r.left + r.width / 2) + 'px';
+  hand.style.top = r.top + 'px';
+  hand.style.display = 'block';
+}
+window.addEventListener('resize', () => { if (tutorialActive) setTutorialHandTarget(tutorialHandTargetId); });
+// Any of these opening (e.g. the colour panel, during the Recolour
+// step) would otherwise sit right underneath the hint pill, which — on
+// a typical phone width — spans nearly edge to edge and can cover the
+// very swatches/menu the player needs to reach. Rather than trying to
+// find a position that's guaranteed never to overlap ANY panel (they
+// can grow tall enough to fill most of the screen), the hint (and the
+// pointing hand, which would otherwise be left dangling over whatever
+// it was aimed at) just steps out of the way for as long as one is open.
+const TUTORIAL_POPUP_IDS = ['typeMenuPanel', 'colorPanel', 'menuPanel', 'infoPanel'];
+function tutorialAnyPopupOpen() {
+  return TUTORIAL_POPUP_IDS.some((id) => {
+    const el = document.getElementById(id);
+    return el && el.classList.contains('show');
+  });
+}
+// The heart of the walkthrough — called once whenever a step begins,
+// AND every animate() frame while the tutorial is active (see the Boot
+// section), because which buttons should be usable and where the hand
+// should point both depend on the LIVE, continuously-changing game
+// state (which tool is selected, whether a Briq is currently aimed at
+// under the crosshair) — not just on which step is active. Remove and
+// Recolour each genuinely have three distinct phases (switch tool, aim
+// at a Briq, press to confirm), and re-deriving this fresh every frame
+// is what lets the hand and the enabled buttons track the player's
+// actual progress through those phases in real time, rather than only
+// reacting after the fact to a discrete one-off event.
+function updateTutorialUI() {
+  const step = TUTORIAL_STEPS[tutorialStepIndex];
+  if (!step) return;
+  if (tutorialAnyPopupOpen()) {
+    document.getElementById('tutorialHint').style.display = 'none';
+    document.getElementById('tutorialHand').style.display = 'none';
+    return; // buttons keep whatever enabled/disabled state they already had \u2014 nothing about which panel is open should change what's allowed
+  }
+  document.getElementById('tutorialHint').style.display = 'flex';
+  let text = step.text();
+  if (step.id === 'build') {
+    setTutorialButtonsEnabled(['toolPlace']);
+    setTutorialHandTarget('actionBtn');
+  } else if (step.id === 'remove') {
+    if (tool !== 'remove') {
+      text = 'Now switch to the Remove tool (\ud83d\uddd1\ufe0f).';
+      setTutorialButtonsEnabled(['toolRemove']);
+      setTutorialHandTarget('toolRemove');
+    } else if (!currentTargetCell) {
+      text = 'Look at the Briq you just built.';
+      setTutorialButtonsEnabled([]);
+      setTutorialHandTarget(null); // aiming is a camera move, not a button press — nothing fixed to point at
+    } else {
+      text = touchUI ? 'Now tap the round button to remove it.' : 'Now left-click to remove it.';
+      setTutorialButtonsEnabled([]);
+      setTutorialHandTarget('actionBtn');
+    }
+  } else if (step.id === 'recolour') {
+    if (tool !== 'paint') {
+      text = 'Switch to the Recolour tool (\ud83c\udfa8). You can also tap the colour swatch first to pick a colour.';
+      setTutorialButtonsEnabled(['toolPaint', 'colorBtnInline']);
+      setTutorialHandTarget('toolPaint');
+    } else if (!currentTargetCell) {
+      text = 'Aim at the Briq you want to recolour.';
+      setTutorialButtonsEnabled(['colorBtnInline']);
+      setTutorialHandTarget(null);
+    } else {
+      text = touchUI ? 'Now tap the round button to recolour it.' : 'Now left-click to recolour it.';
+      setTutorialButtonsEnabled(['colorBtnInline']);
+      setTutorialHandTarget('actionBtn');
+    }
+  } else {
+    // welcome / closing — nothing to restrict, no button press to point at.
+    setTutorialButtonsEnabled(TUTORIAL_MANAGED_BUTTON_IDS);
+    setTutorialHandTarget(null);
+  }
+  document.getElementById('tutorialHintText').textContent = text;
+}
+function showTutorialStep() {
+  const step = TUTORIAL_STEPS[tutorialStepIndex];
+  if (!step) { endTutorial(); return; }
+  tutorialWaitingFor = step.waitFor;
+  document.getElementById('tutorialNextBtn').style.display = step.waitFor ? 'none' : 'inline-block';
+  updateTutorialUI(); // sets tutorialHint's own display itself now (hidden whenever a popup is covering it) — apply immediately rather than waiting for the next animate() frame, to avoid a one-frame flash of the PREVIOUS step's state
+}
+function startTutorial() {
+  closeAllPopups();
+  tutorialActive = true;
+  tutorialStepIndex = 0;
+  showTutorialStep();
+}
+function advanceTutorial() {
+  tutorialStepIndex++;
+  showTutorialStep();
+}
+function endTutorial() {
+  tutorialActive = false;
+  tutorialWaitingFor = null;
+  setTutorialButtonsEnabled(TUTORIAL_MANAGED_BUTTON_IDS); // restore every managed button, regardless of which was disabled when this fired
+  setTutorialHandTarget(null);
+  document.getElementById('tutorialHint').style.display = 'none';
+  markTutorialDone();
+}
+// Called from every place that already signals a first-time achievement
+// for the same action (build/remove/recolour) — fires every time,
+// regardless of whether that achievement itself has already been
+// unlocked in an earlier session, which is what lets "Show tutorial
+// again" work correctly for a returning player.
+function notifyTutorial(eventId) {
+  if (tutorialActive && tutorialWaitingFor === eventId) advanceTutorial();
+}
+document.getElementById('tutorialNextBtn').addEventListener('click', advanceTutorial);
+document.getElementById('tutorialSkipBtn').addEventListener('click', endTutorial);
+document.getElementById('tutorialRestartBtn').addEventListener('click', startTutorial);
+
 /* ---------------- Settings (sound, look sensitivity, field of view) ---------------- */
 let lookSensitivity = 1; // multiplier applied on top of the base look-speed constants
 function setLookSensitivity(v) { lookSensitivity = v; }
@@ -5372,19 +6300,103 @@ let clipboard = null;  // { entries: [...captureBrickForUndo-shaped, already re-
 let currentCopyCorner = null; // the ground cell under the crosshair right now, refreshed each frame by updateCopyAimAndGhost
 const copyGhostGeo = new THREE.BoxGeometry(1, 1, 1);
 let copyGhostMesh = null;
-const copyMatMark = new THREE.MeshBasicMaterial({ color: 0x5fa8d6, transparent: true, opacity: 0.35 });
+// depthWrite:false matters here for the same reason it does for the
+// Remove Box tool's own fill — without it, this translucent box can
+// make the per-Briq blue highlights (added below) inside/behind it
+// fail their own depth test, independent of draw/render order.
+const copyMatMark = new THREE.MeshBasicMaterial({ color: 0x5fa8d6, transparent: true, opacity: 0.35, depthWrite: false });
+// Every Briq that's CURRENTLY fully inside the area being marked (the
+// same "must sit fully inside the rectangle" rule captureClipboard
+// itself uses — not just any partial overlap) gets its own blue
+// overlay, live, while dragging out the corners — so it's obvious
+// exactly what would actually get captured before committing to it.
+const copyAreaHighlightMat = new THREE.MeshBasicMaterial({ color: 0x5fa8d6, transparent: true, opacity: 0.65, depthWrite: false });
+let copyAreaHighlightMeshes = [];
+function clearCopyAreaHighlights() {
+  for (const m of copyAreaHighlightMeshes) scene.remove(m);
+  copyAreaHighlightMeshes = [];
+}
 // Once something is actually captured, the preview switches from a
 // plain marking box to a group of individually-shaped ghost meshes (one
 // per captured piece, reusing the exact same geometry/transform math as
 // the real placement functions) — so what you see hovering under the
 // crosshair is exactly the outline of what you copied, not just a
 // same-footprint blob standing in for it.
-const copyPreviewMat = new THREE.MeshBasicMaterial({ color: 0xe7b781, transparent: true, opacity: 0.5 });
+const copyPreviewMat = new THREE.MeshBasicMaterial({ color: 0x5fa8d6, transparent: true, opacity: 0.5 });
+// Shown per-piece instead of copyPreviewMat wherever that specific
+// piece wouldn't actually be placeable at the currently previewed spot
+// — pasting a group is never all-or-nothing (see pasteClipboardAt's own
+// comment on that), so the preview reflects exactly which pieces would
+// actually land and which would be silently skipped, the same way the
+// build-row preview already turns red slot by slot rather than judging
+// the whole row as one unit.
+const copyPreviewInvalidMat = new THREE.MeshBasicMaterial({ color: 0xd9534f, transparent: true, opacity: 0.5 });
 let clipboardPreviewGroup = null;
 
 function copyGroundXZ(hit) {
   if (!hit) return null;
   return { x: Math.round(hit.point.x / CELL_M), z: Math.round(hit.point.z / CELL_M) };
+}
+// Which Y the clipboard's own bottom should rest on for a paste
+// anchored at (ax, az) — the HIGHEST existing surface anywhere within
+// the WHOLE footprint the clipboard would occupy, not just whatever's
+// exactly under the crosshair. This is what makes the ENTIRE prefab
+// visibly lift the moment ANY part of it would land on something
+// raised — like a rigid object resting on the tallest bump within its
+// own footprint — rather than only reacting to the single point the
+// crosshair happens to be aimed at (which used to mean one Briq deep
+// inside the group could sit buried inside another one entirely,
+// simply because the crosshair itself wasn't pointed at that spot).
+// The cells ONE clipboard entry would occupy if shifted by (dx, dy, dz)
+// — dispatches by entry type exactly like pasteEntryAt itself does, but
+// only computes the cells (no placement, no side effects), so this can
+// be used purely to TEST whether a spot is actually free.
+function entryCellsAt(e, dx, dy, dz) {
+  if (e.isRoofBlock) {
+    const crossCells = BRIQ_CATALOG.DACH.crossCells;
+    return roofCellsFor(e.x0 + dx, e.x1 + dx, e.z0 + dz, e.z1 + dz, e.yLow + dy, e.yHigh + dy, e.slopeAxis, crossCells);
+  }
+  if (e.isSlabBlock) {
+    const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
+    return slabCellsFor(e.x0 + dx, e.x1 + dx, e.y + dy, e.z0 + dz, e.z1 + dz, crossCells);
+  }
+  const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
+  return cellsForBrick([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, crossCells, e.orientation);
+}
+// Whether ONE clipboard entry would genuinely be placeable if shifted
+// by (dx, dy, dz) — mirroring exactly what pasteEntryAt's own
+// placeBrick/placeSlabBlock/placeRoofBlock calls would actually check:
+// Platte/Dach only ever require free cells (matching how those two
+// never call the structural support check either), while an ordinary
+// Briq also needs real support underneath, same as normal building.
+// Whether ONE clipboard entry would genuinely be placeable if shifted
+// by (dx, dy, dz) — mirroring exactly what pasteEntryAt's own
+// placeBrick/placeSlabBlock/placeRoofBlock calls would actually check:
+// Platte/Dach only ever require free cells (matching how those two
+// never call the structural support check either), while an ordinary
+// Briq also needs real support underneath, same as normal building.
+// `virtualCells` (a Set of "x_y_z" strings) represents everywhere the
+// REST of the same clipboard would also land — without it, every
+// course of a multi-course captured wall except the very bottom one
+// would wrongly show invalid: its own structural check looks for
+// support at the spot the course BELOW it would occupy, but nothing is
+// actually built there yet during a preview (or even mid-paste, before
+// that lower course's own placeBrick call has run) — it only exists as
+// another piece of this SAME clipboard, not in the real occupancy map.
+function entryValidAt(e, dx, dy, dz, virtualCells) {
+  const cells = entryCellsAt(e, dx, dy, dz);
+  if (!cellsFree(cells)) return false;
+  if (e.isRoofBlock || e.isSlabBlock) return true;
+  const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
+  const fp = footprintOf([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, crossCells, e.orientation);
+  if (fp.y0 <= 0) return true; // ground-level is always fine, same rule structuralCheck itself uses
+  for (let x = fp.x0; x <= fp.x1; x++) {
+    for (let z = fp.z0; z <= fp.z1; z++) {
+      if (occupancy.has(key(x, fp.y0 - 1, z))) return true;
+      if (virtualCells && virtualCells.has(`${x}_${fp.y0 - 1}_${z}`)) return true;
+    }
+  }
+  return false;
 }
 function shiftCaptureEntry(e, dx, dy, dz) {
   if (e.isRoofBlock) { e.x0 += dx; e.x1 += dx; e.z0 += dz; e.z1 += dz; e.yLow += dy; e.yHigh += dy; }
@@ -5402,6 +6414,7 @@ function buildEntryGhostMesh(e) {
     const mesh = new THREE.Mesh(getRoofBodyGeo(t.geoDimX, t.thickness, t.geoDimZ), copyPreviewMat);
     mesh.position.set(t.position.x, t.position.y, t.position.z);
     mesh.rotation.x = t.rotation.x; mesh.rotation.z = t.rotation.z;
+    mesh.castShadow = true; mesh.receiveShadow = true;
     return mesh;
   }
   if (e.isSlabBlock) {
@@ -5409,6 +6422,7 @@ function buildEntryGhostMesh(e) {
     const widthCells = e.x1 - e.x0, depthCells = e.z1 - e.z0;
     const mesh = new THREE.Mesh(getSlabBodyGeo(e.mainType, widthCells, depthCells), copyPreviewMat);
     mesh.position.set((e.x0 + e.x1) / 2 * CELL_M, (e.y + crossCells / 2) * CELL_M, (e.z0 + e.z1) / 2 * CELL_M);
+    mesh.castShadow = true; mesh.receiveShadow = true;
     return mesh;
   }
   const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
@@ -5417,6 +6431,7 @@ function buildEntryGhostMesh(e) {
   const c = brickCenterWorld(fp);
   mesh.position.set(c[0], c[1], c[2]);
   if (e.orientation === 'z') mesh.rotation.y = Math.PI / 2;
+  mesh.castShadow = true; mesh.receiveShadow = true;
   return mesh;
 }
 function clearClipboardPreview() {
@@ -5451,6 +6466,7 @@ function pasteEntryAt(e, dx, dy, dz) {
 // becomes the clipboard's own local (0,0) — paste then only has to add
 // the target anchor back on, regardless of where the copy was made.
 function captureClipboard(x0, x1, z0, z1) {
+  clearCopyAreaHighlights(); // the marking phase is over the moment a capture is attempted, successful or not — nothing left to show as "about to be captured"
   const entries = [];
   let minY = Infinity, maxY = -Infinity;
   for (const b of bricks.values()) {
@@ -5470,18 +6486,13 @@ function clearClipboard() {
   clearClipboardPreview();
   updateBriqControlsVisibility();
 }
-function updateCopyStatusLabel() {
-  const label = document.getElementById('copyStatusLabel');
-  if (!label) return;
-  if (clipboard) label.textContent = `${clipboard.entries.length} Briq${clipboard.entries.length === 1 ? '' : 's'} ready \u2014 click to paste`;
-  else if (copyStart) label.textContent = 'Mark the opposite corner\u2026';
-  else label.textContent = 'Mark the first corner of an area to copy';
-}
-// Stamps the whole clipboard with (tx,tz) as its new local (0,0), at the
-// SAME height it was copied from. Individual pieces that don't fit at
-// the new spot are simply skipped rather than aborting the whole paste —
-// pasting a room next to uneven ground/terrain shouldn't be all-or-
-// nothing. Every successfully placed piece undoes together in one step.
+// Stamps the whole clipboard with (tx,tz) as its new local (0,0), at
+// the SAME absolute height it was captured from — no automatic height
+// adjustment (that's being revisited another time). Individual pieces
+// that don't fit at the new spot are simply skipped rather than
+// aborting the whole paste — pasting a room next to uneven ground
+// shouldn't be all-or-nothing. Every successfully placed piece undoes
+// together in one step.
 function pasteClipboardAt(tx, tz) {
   if (!clipboard) return 0;
   const placedIds = [];
@@ -5497,11 +6508,16 @@ function pasteClipboardAt(tx, tz) {
   }
   return placedIds.length;
 }
-// Where the clipboard's own local (0,0) corner should land so that the
-// COPY'S CENTER — not its first-marked corner — ends up under the
-// crosshair/cursor at `cur`. Used identically by the preview (so what
-// you see is centred on the aim point) and the real paste (so it lands
-// exactly where the preview showed it).
+// Where the clipboard's own local (0,0) corner should land for a paste
+// aimed at `cur` — simply centred on the aim point, one-to-one with
+// wherever the cursor actually is. An earlier version of this also
+// snapped to a computed grid to try to line up flush/half-offset with
+// whatever's underneath, but that made the preview's position harder
+// to predict than it helped — removed for now in favour of this
+// simple, always-predictable behaviour. The height (see
+// copyPasteRestY, used alongside this) is unaffected by this choice —
+// that's found by genuine collision testing regardless of how the
+// X/Z anchor itself is computed.
 function copyPasteAnchor(cur) {
   if (!clipboard) return cur;
   return { x: cur.x - Math.floor(clipboard.w / 2), z: cur.z - Math.floor(clipboard.d / 2) };
@@ -5581,7 +6597,11 @@ function rotateClipboard90() {
 function doCopyAction() {
   const cur = currentCopyCorner;
   if (!cur) return;
-  if (clipboard) { const a = copyPasteAnchor(cur); pasteClipboardAt(a.x, a.z); return; }
+  if (clipboard) {
+    const a = copyPasteAnchor(cur);
+    pasteClipboardAt(a.x, a.z);
+    return;
+  }
   if (!copyStart) { copyStart = cur; updateBriqControlsVisibility(); return; }
   const x0 = Math.min(copyStart.x, cur.x), x1 = Math.max(copyStart.x, cur.x) + 1;
   const z0 = Math.min(copyStart.z, cur.z), z1 = Math.max(copyStart.z, cur.z) + 1;
@@ -5596,19 +6616,42 @@ function updateCopyAimAndGhost() {
   if (!cur) {
     if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
     if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
+    clearCopyAreaHighlights();
     return;
   }
   if (clipboard) {
     if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
+    clearCopyAreaHighlights(); // marking is over once a clipboard exists — nothing left to highlight as "about to be captured"
     if (clipboardPreviewGroup) {
       const a = copyPasteAnchor(cur);
       clipboardPreviewGroup.position.set(a.x * CELL_M, 0, a.z * CELL_M);
+      // Every cell the WHOLE clipboard would occupy here, gathered once
+      // up front — this is what lets an upper course rest on the one
+      // below it from the SAME paste (see entryValidAt's own comment on
+      // why that's needed), rather than only ever seeing what's already
+      // really built.
+      const virtualCells = new Set();
+      for (const e of clipboard.entries) {
+        for (const c of entryCellsAt(e, a.x, 0, a.z)) virtualCells.add(c.join('_'));
+      }
+      // Per-piece colour, not one verdict for the whole group — pasting
+      // was never all-or-nothing (see pasteClipboardAt's own comment on
+      // that), so this shows exactly which pieces would actually land
+      // (blue) and which would be silently skipped (red) — checked at
+      // the SAME fixed height (dy=0) the paste itself now always uses.
+      clipboard.entries.forEach((e, i) => {
+        const mesh = clipboardPreviewGroup.children[i];
+        if (mesh) mesh.material = entryValidAt(e, a.x, 0, a.z, virtualCells) ? copyPreviewMat : copyPreviewInvalidMat;
+      });
       if (!clipboardPreviewGroup.parent) scene.add(clipboardPreviewGroup);
     }
     return;
   }
   if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
-  if (!copyGhostMesh) copyGhostMesh = new THREE.Mesh(copyGhostGeo, copyMatMark);
+  if (!copyGhostMesh) {
+    copyGhostMesh = new THREE.Mesh(copyGhostGeo, copyMatMark);
+    copyGhostMesh.renderOrder = 1; // drawn BEFORE the per-Briq blue highlights below, so those always show clearly
+  }
   copyGhostMesh.material = copyMatMark;
   const a = copyStart || cur;
   const x0 = Math.min(a.x, cur.x), x1 = Math.max(a.x, cur.x) + 1;
@@ -5616,8 +6659,219 @@ function updateCopyAimAndGhost() {
   copyGhostMesh.scale.set((x1 - x0) * CELL_M, CELL_M, (z1 - z0) * CELL_M);
   copyGhostMesh.position.set((x0 + x1) / 2 * CELL_M, CELL_M / 2, (z0 + z1) / 2 * CELL_M);
   if (!copyGhostMesh.parent) scene.add(copyGhostMesh);
+
+  clearCopyAreaHighlights();
+  for (const [, b] of bricks) {
+    const fp = b.footprint;
+    // Fully inside only — matching EXACTLY the rule captureClipboard
+    // itself uses, so this highlight never promises something that
+    // wouldn't actually get captured.
+    if (fp.x0 >= x0 && fp.x1 < x1 && fp.z0 >= z0 && fp.z1 < z1) {
+      const hl = new THREE.Mesh(b.mesh.geometry, copyAreaHighlightMat);
+      hl.position.copy(b.mesh.position);
+      hl.rotation.copy(b.mesh.rotation);
+      hl.scale.copy(b.mesh.scale);
+      hl.renderOrder = 2;
+      scene.add(hl);
+      copyAreaHighlightMeshes.push(hl);
+    }
+  }
 }
 document.getElementById('copyNewSelectionBtn').addEventListener('click', clearClipboard);
+
+/* ---------------- Remove: Box mode ---------------- */
+// The SAME two-click drag Copy uses for its own ground rectangle, but
+// for clearing instead of copying — and unlike the ordinary Small/Large
+// area press (which only ever clears ONE course, whichever the
+// crosshair happens to be aimed at), this takes out every Briq inside
+// the box at ANY height at all in one go.
+let currentRemoveBoxCorner = null; // the ground cell under the crosshair right now, refreshed each frame
+const removeBoxGhostGeo = new THREE.BoxGeometry(1, 1, 1);
+// depthWrite:false is essential here, not just cosmetic — without it,
+// this translucent box still writes to the depth buffer despite being
+// see-through, which can make the per-Briq red highlights (and the
+// real Briqs themselves) behind/inside it fail their own depth test and
+// not render correctly, independent of renderOrder (which only governs
+// blending order among transparent objects, not this).
+const removeBoxGhostMat = new THREE.MeshBasicMaterial({ color: 0xe08363, transparent: true, opacity: 0.3, depthWrite: false });
+// A flat translucent fill alone didn't make the box's own boundary
+// legible — a plain reddish tint has no edges of its own to read. This
+// wireframe is a CHILD of the fill mesh (added once, never re-created),
+// so it automatically inherits the parent's position/scale every frame
+// for free, in a much more saturated colour than the fill so the box's
+// actual footprint is unambiguous at a glance.
+const removeBoxEdgesGeo = new THREE.EdgesGeometry(removeBoxGhostGeo);
+const removeBoxEdgesMat = new THREE.LineBasicMaterial({ color: 0xff2200 });
+let removeBoxGhostMesh = null;
+// Which existing Briqs the CURRENTLY drawn box would actually clear —
+// each one gets its own bright-red overlay mesh directly on top of it
+// (matching its exact geometry/position/rotation), rebuilt fresh every
+// frame the box's extent changes, so it's never left stale pointing at
+// pieces no longer inside it.
+let removeBoxHighlightMeshes = [];
+const removeBoxHighlightMat = new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.65, depthWrite: false });
+function clearRemoveBoxHighlights() {
+  for (const m of removeBoxHighlightMeshes) scene.remove(m);
+  removeBoxHighlightMeshes = [];
+}
+function doRemoveBoxAction() {
+  const cur = currentRemoveBoxCorner;
+  if (!cur) return;
+  if (!removeBoxStart) { removeBoxStart = cur; updateActionBtnLabel(); return; }
+  const x0 = Math.min(removeBoxStart.x, cur.x), x1 = Math.max(removeBoxStart.x, cur.x) + 1;
+  const z0 = Math.min(removeBoxStart.z, cur.z), z1 = Math.max(removeBoxStart.z, cur.z) + 1;
+  removeBoxStart = null;
+  if (removeBoxArea(x0, x1, z0, z1) > 0) triggerCrosshairSwing('remove');
+  updateActionBtnLabel();
+}
+function updateRemoveBoxAimAndGhost() {
+  const hit = raycastAim();
+  const cur = copyGroundXZ(hit);
+  currentRemoveBoxCorner = cur;
+  if (!cur) {
+    if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+    clearRemoveBoxHighlights();
+    return;
+  }
+  if (!removeBoxGhostMesh) {
+    removeBoxGhostMesh = new THREE.Mesh(removeBoxGhostGeo, removeBoxGhostMat);
+    removeBoxGhostMesh.renderOrder = 1; // drawn BEFORE the per-Briq red highlights (see there), so those always show clearly red
+    removeBoxGhostMesh.add(new THREE.LineSegments(removeBoxEdgesGeo, removeBoxEdgesMat));
+  }
+  const a = removeBoxStart || cur;
+  const x0 = Math.min(a.x, cur.x), x1 = Math.max(a.x, cur.x) + 1;
+  const z0 = Math.min(a.z, cur.z), z1 = Math.max(a.z, cur.z) + 1;
+  // Deliberately spans the WHOLE build height, not just one course —
+  // the clearest possible visual cue that this box takes out every
+  // layer inside it, unlike the ordinary single-course area press.
+  // HEIGHT_MAX is already in metres, so no CELL_M conversion here.
+  const boxHeightM = HEIGHT_MAX + 0.5;
+  removeBoxGhostMesh.scale.set((x1 - x0) * CELL_M, boxHeightM, (z1 - z0) * CELL_M);
+  removeBoxGhostMesh.position.set((x0 + x1) / 2 * CELL_M, boxHeightM / 2, (z0 + z1) / 2 * CELL_M);
+  if (!removeBoxGhostMesh.parent) scene.add(removeBoxGhostMesh);
+
+  clearRemoveBoxHighlights();
+  for (const [, b] of bricks) {
+    const fp = b.footprint;
+    if (fp.x1 >= x0 && fp.x0 < x1 && fp.z1 >= z0 && fp.z0 < z1) {
+      const hl = new THREE.Mesh(b.mesh.geometry, removeBoxHighlightMat);
+      hl.position.copy(b.mesh.position);
+      hl.rotation.copy(b.mesh.rotation);
+      hl.scale.copy(b.mesh.scale);
+      // Both this and the box's own translucent fill are transparent,
+      // so without an explicit draw order, THREE.js's own distance-based
+      // sort can render the fill ON TOP of a highlight that's fully
+      // INSIDE the box, blending it toward the fill's orange rather than
+      // showing clearly red — while a Briq sitting right at the box's
+      // edge (its highlight partly outside the fill's own footprint)
+      // stays visibly red there regardless, which is exactly what made
+      // it look like only edge pieces were highlighted at all. Forcing
+      // this to draw AFTER (renderOrder) the fill keeps every
+      // highlighted Briq clearly red, wherever in the box it sits.
+      hl.renderOrder = 2;
+      scene.add(hl);
+      removeBoxHighlightMeshes.push(hl);
+    }
+  }
+}
+
+/* ---------------- Measure tool ---------------- */
+// A simple two-click ruler: click a first point (anywhere on the ground
+// or an existing Briq's surface), then a second one, and it reports the
+// distance between them — split into horizontal (X/Z-plane) and
+// vertical (height) components, plus the direct straight-line distance,
+// since a builder usually cares about one or the other specifically
+// (how far apart are these two walls vs. how much taller is this one)
+// rather than only the diagonal. A third click starts an entirely fresh
+// measurement from that new point, rather than requiring an explicit
+// "clear" step first.
+let measureStart = null; // THREE.Vector3, grid-snapped world position
+let measureEnd = null;
+let measureStartMarker = null;
+let measureEndMarker = null;
+let measureLine = null;
+const measureMarkerGeo = new THREE.SphereGeometry(0.06, 12, 12);
+const measureMarkerMat = new THREE.MeshBasicMaterial({ color: 0xffcc44 });
+function makeMeasureMarker() {
+  return new THREE.Mesh(measureMarkerGeo, measureMarkerMat);
+}
+function snapToGridVec3(p) {
+  return new THREE.Vector3(
+    Math.round(p.x / CELL_M) * CELL_M,
+    Math.round(p.y / CELL_M) * CELL_M,
+    Math.round(p.z / CELL_M) * CELL_M,
+  );
+}
+function clearMeasureVisuals() {
+  if (measureStartMarker) { scene.remove(measureStartMarker); measureStartMarker = null; }
+  if (measureEndMarker) { scene.remove(measureEndMarker); measureEndMarker = null; }
+  if (measureLine) { scene.remove(measureLine); measureLine = null; }
+  if (measureLivePreviewLine) { scene.remove(measureLivePreviewLine); measureLivePreviewLine = null; }
+}
+// Called whenever the Measure tool is left (switching to any other
+// tool) as well as by the tool's own "third click starts fresh" case —
+// resets everything back to the empty state, not just the visuals.
+function clearMeasurement() {
+  measureStart = null;
+  measureEnd = null;
+  clearMeasureVisuals();
+  document.getElementById('measureResult').style.display = 'none';
+}
+function formatMeasureCm(metres) {
+  return Math.round(metres * 100) + ' cm';
+}
+function showMeasureResult(a, b) {
+  const dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y), dz = Math.abs(a.z - b.z);
+  const horizontal = Math.sqrt(dx * dx + dz * dz);
+  const vertical = dy;
+  const direct = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const el = document.getElementById('measureResult');
+  el.textContent = `\u2194 ${formatMeasureCm(horizontal)}   \u2195 ${formatMeasureCm(vertical)}   \u2197 ${formatMeasureCm(direct)}`;
+  el.style.display = 'block';
+}
+function doMeasureAction() {
+  const hit = raycastAim();
+  if (!hit) return;
+  const point = snapToGridVec3(hit.point);
+  if (!measureStart || (measureStart && measureEnd)) {
+    // Either the very first click, or the "third click starts over"
+    // case (both points were already set) — either way, begin fresh.
+    clearMeasureVisuals();
+    document.getElementById('measureResult').style.display = 'none';
+    measureStart = point;
+    measureEnd = null;
+    measureStartMarker = makeMeasureMarker();
+    measureStartMarker.position.copy(measureStart);
+    scene.add(measureStartMarker);
+  } else {
+    measureEnd = point;
+    measureEndMarker = makeMeasureMarker();
+    measureEndMarker.position.copy(measureEnd);
+    scene.add(measureEndMarker);
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([measureStart, measureEnd]);
+    measureLine = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffcc44 }));
+    scene.add(measureLine);
+    showMeasureResult(measureStart, measureEnd);
+    unlockAchievement('first_measure');
+  }
+  updateActionBtnLabel(); // MARK -> MEASURE -> NEW, reflecting the click that just happened
+}
+// The live "still aiming for the second point" preview — a dashed-style
+// feel via a plain line straight to wherever the crosshair currently
+// is, with the result readout updating in real time before the second
+// click actually commits it.
+let measureLivePreviewLine = null;
+function updateMeasureAimAndGhost() {
+  if (measureLivePreviewLine) { scene.remove(measureLivePreviewLine); measureLivePreviewLine = null; }
+  if (!measureStart || measureEnd) return; // nothing to preview before the first click, or once both points are already set
+  const hit = raycastAim();
+  if (!hit) return;
+  const point = snapToGridVec3(hit.point);
+  const lineGeo = new THREE.BufferGeometry().setFromPoints([measureStart, point]);
+  measureLivePreviewLine = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffcc44, transparent: true, opacity: 0.6 }));
+  scene.add(measureLivePreviewLine);
+  showMeasureResult(measureStart, point);
+}
 
 function updateSlabAimAndGhost() {
   const hit = raycastAim();
@@ -5751,68 +7005,31 @@ function startHoldSession() {
 }
 
 // Tiles a straight span [coordLo, coordHi] (inclusive, along one locked
-// axis) with the type's available module sizes, biggest first — the
-// exact same "greedy, largest piece that still fits" approach the old
-// per-frame gap-filler already used, just applied to the WHOLE dragged
-// row in a single pass now, rather than reacting to each frame's own
-// jump. Used identically by the live ghost preview during a drag AND
-// the actual commit on release, so what's shown while dragging is
-// always exactly what release will build — never a surprise. A
-// sub-module remainder at the far end (the span left over is smaller
-// than even the smallest available piece) is simply left unfilled, same
-// as before: never force an oversized piece to overrun the row's end.
+// axis) using ONLY the player's currently-selected size — no automatic
+// mixing in of other module sizes at all any more. A slot that collides
+// with something already there, or that runs out of room before
+// reaching a full piece-length (the far end of an uneven drag), is
+// simply marked invalid rather than being backfilled with a smaller
+// substitute — the ghost preview shows that stretch red, and release
+// only ever builds the ACTUAL selected size, skipping whatever's red.
 function computeRowTiling(axisIdx, fixedOther, y, coordLo, coordHi, mt, orient, preferredLen) {
   const crossCells = BRIQ_CATALOG[mt].crossCells;
-  const sizesDesc = Object.values(BRIQ_CATALOG[mt].sizes).map((s) => s.len).sort((a, b) => b - a);
-  // The player's own currently-selected size comes first — a normal
-  // drag should mostly repeat exactly what they picked (matching how a
-  // single held tap always placed exactly that size), not silently
-  // upgrade itself to whatever the largest available module happens to
-  // be. Other sizes are only ever a FALLBACK now: for a leftover
-  // remainder too short for the preferred size, or to route around an
-  // existing Briq the preferred size collides with.
-  const orderedSizes = preferredLen && sizesDesc.includes(preferredLen)
-    ? [preferredLen, ...sizesDesc.filter((s) => s !== preferredLen)]
-    : sizesDesc;
   const slots = [];
   let pos = coordLo, guard = 0;
   while (pos <= coordHi && guard < 2000) {
     guard++;
     const remaining = coordHi - pos + 1;
-    const fittingSizes = orderedSizes.filter((s) => s <= remaining);
-    if (!fittingSizes.length) break; // remainder smaller than even the smallest module — leave it, never force an oversized piece to overrun the row
-    // Try every available size at THIS exact position, preferred size
-    // first, and use the first one that doesn't collide with anything
-    // already there. Only if EVERY size collides here does this fall
-    // back to marking just the SMALLEST fitting size as a blocked slot
-    // and stepping forward by only that much — never a larger size that
-    // was tried first. This is what keeps a small existing Briq from
-    // blowing a hole in the row bigger than the obstacle itself: a
-    // blocked candidate just means retrying other sizes at that same
-    // spot before giving up on it.
-    let picked = null;
-    for (const s of fittingSizes) {
-      const anchor = axisIdx === 0 ? [pos, y, fixedOther] : [fixedOther, y, pos];
-      const cells = cellsForBrick(anchor, s, crossCells, orient);
-      const fp = footprintOf(anchor, s, crossCells, orient);
-      if (isPlacementValid(cells, fp, mt).ok) { picked = { anchor, len: s, cells, fp, valid: true }; break; }
-    }
-    if (picked) {
-      slots.push(picked);
-      pos += picked.len;
-    } else {
-      // orderedSizes isn't strictly descending any more (the preferred
-      // size was moved to the front), so the smallest FITTING size has
-      // to come from the original descending list, not just the last
-      // element of fittingSizes.
-      const smallestFitting = sizesDesc.filter((sz) => sz <= remaining).pop();
-      const s = smallestFitting;
-      const anchor = axisIdx === 0 ? [pos, y, fixedOther] : [fixedOther, y, pos];
-      const cells = cellsForBrick(anchor, s, crossCells, orient);
-      const fp = footprintOf(anchor, s, crossCells, orient);
-      slots.push({ anchor, len: s, cells, fp, valid: false });
-      pos += s;
-    }
+    const thisLen = Math.min(preferredLen, remaining);
+    const anchor = axisIdx === 0 ? [pos, y, fixedOther] : [fixedOther, y, pos];
+    const cells = cellsForBrick(anchor, thisLen, crossCells, orient);
+    const fp = footprintOf(anchor, thisLen, crossCells, orient);
+    // A shorter-than-selected remainder at the row's far end can never
+    // actually be built with the selected size regardless of what's
+    // underneath it — always invalid, never silently rounded down to a
+    // smaller piece that fits instead.
+    const valid = thisLen === preferredLen && isPlacementValid(cells, fp, mt).ok;
+    slots.push({ anchor, len: thisLen, cells, fp, valid });
+    pos += thisLen;
   }
   return slots;
 }
@@ -5848,14 +7065,28 @@ function renderDragRowPreview(slots, mt, orient) {
 // rest of the row is still built around it, exactly like the old
 // per-frame gap-filler already did for a fast jump, just resolved for
 // the complete row now instead of only the skipped stretch.
+// How far along the locked axis a dragged row currently reaches — in
+// WHOLE piece-lengths only. A drag that hasn't yet covered a full extra
+// piece-length keeps showing exactly as many pieces as it already had;
+// the row only grows once the aim has moved far enough to fit ANOTHER
+// complete piece, never a partial/shorter one. This is what keeps a
+// half-dragged distance from ever showing (or building) a smaller
+// substitute-sized ghost at the far end — there simply isn't a "partial
+// piece" slot in the span at all until the drag earns a whole new one.
+function computeRowSpan(startCoord, endCoord, len) {
+  const dir = endCoord >= startCoord ? 1 : -1;
+  const distance = Math.abs(endCoord - startCoord);
+  const numPieces = 1 + Math.floor(distance / len); // always at least the first piece, at the pressed position
+  if (dir > 0) return { coordLo: startCoord, coordHi: startCoord + numPieces * len - 1 };
+  return { coordLo: startCoord - (numPieces - 1) * len, coordHi: startCoord + len - 1 };
+}
 function commitDragRow() {
   clearDragRowPreview();
   if (!holdSession || !holdSession.axis || !holdSession.rowStart) return;
   const axisIdx = holdSession.axis === 'x' ? 0 : 2;
   const startCoord = holdSession.rowStart[axisIdx];
   const endCoord = holdSession.rowEndCoord;
-  const coordLo = Math.min(startCoord, endCoord);
-  const coordHi = Math.max(startCoord, endCoord) + brickLen - 1;
+  const { coordLo, coordHi } = computeRowSpan(startCoord, endCoord, brickLen);
   const slots = computeRowTiling(axisIdx, holdSession.fixedOther, holdSession.y, coordLo, coordHi, mainType, holdSession.axis, brickLen);
   const placedIds = [];
   for (const slot of slots) {
@@ -5866,11 +7097,14 @@ function commitDragRow() {
     pushUndo(() => { for (const id of placedIds) removeBrickById(id); });
     playPlaceSound(holdSession.y === 0);
     recordBriqsPlaced(placedIds.length);
+    notifyTutorial('build');
   }
 }
 
 function doAction() {
   if (tool === 'copy') { doCopyAction(); return; }
+  if (tool === 'measure') { doMeasureAction(); return; }
+  if (tool === 'remove' && removeBoxMode) { doRemoveBoxAction(); return; }
   if (editMode === 'deko') { doDecorAction(); return; }
   if (tool === 'paint') { doPaintAction(); return; }
   if (tool === 'place' && mainType === 'PLATTE') { doSlabAction(); return; }
@@ -5920,8 +7154,7 @@ function doAction() {
         const axisIdx = holdSession.axis === 'x' ? 0 : 2;
         holdSession.rowEndCoord = anchor[axisIdx];
         const startCoord = holdSession.rowStart[axisIdx];
-        const coordLo = Math.min(startCoord, holdSession.rowEndCoord);
-        const coordHi = Math.max(startCoord, holdSession.rowEndCoord) + brickLen - 1;
+        const { coordLo, coordHi } = computeRowSpan(startCoord, holdSession.rowEndCoord, brickLen);
         renderDragRowPreview(
           computeRowTiling(axisIdx, holdSession.fixedOther, holdSession.y, coordLo, coordHi, mainType, holdSession.axis, brickLen),
           mainType, holdSession.axis,
@@ -5997,6 +7230,13 @@ function animate() {
   elapsedTime += dt;
   if (backdropUpdaters.length) { for (const fn of backdropUpdaters) fn(elapsedTime); }
   if (activeDecorLights.length) updateDecorLightFlicker(elapsedTime);
+  // Re-derives which buttons should be enabled and where the pointing
+  // hand should be every single frame — Remove and Recolour each have
+  // phases (switch tool, aim, press) that depend on the player's LIVE
+  // tool selection and current aim target, not just on which step is
+  // active, so this has to track reality continuously rather than only
+  // reacting to one-off events.
+  if (tutorialActive) updateTutorialUI();
 
   if (mode === 'fp') {
     let ix = 0, iz = 0;
@@ -6045,43 +7285,85 @@ function animate() {
     if (slabGhostMesh && slabGhostMesh.parent) scene.remove(slabGhostMesh);
     if (roofGhostMesh && roofGhostMesh.parent) scene.remove(roofGhostMesh);
     if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
+    clearRemoveBoxHighlights();
+    if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+    clearRemoveBoxHighlights();
     updateCopyAimAndGhost();
+  } else if (tool === 'measure') {
+    ghostMesh.visible = false;
+    if (decorGhostMesh) { scene.remove(decorGhostMesh); decorGhostMesh = null; }
+    if (slabGhostMesh && slabGhostMesh.parent) scene.remove(slabGhostMesh);
+    if (roofGhostMesh && roofGhostMesh.parent) scene.remove(roofGhostMesh);
+    if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
+    clearRemoveBoxHighlights();
+    if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
+    clearCopyAreaHighlights();
+    if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
+    if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+    clearRemoveBoxHighlights();
+    updateMeasureAimAndGhost();
   } else if (editMode === 'deko') {
     ghostMesh.visible = false;
     if (slabGhostMesh && slabGhostMesh.parent) scene.remove(slabGhostMesh);
     if (roofGhostMesh && roofGhostMesh.parent) scene.remove(roofGhostMesh);
     if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
+    clearRemoveBoxHighlights();
     if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
+    clearCopyAreaHighlights();
     if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
+    if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+    clearRemoveBoxHighlights();
     updateDecorAimAndGhost();
   } else if (tool === 'place' && mainType === 'PLATTE') {
     ghostMesh.visible = false;
     if (decorGhostMesh) { scene.remove(decorGhostMesh); decorGhostMesh = null; }
     if (roofGhostMesh && roofGhostMesh.parent) scene.remove(roofGhostMesh);
     if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
+    clearRemoveBoxHighlights();
     if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
+    clearCopyAreaHighlights();
     if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
+    if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+    clearRemoveBoxHighlights();
     updateSlabAimAndGhost();
   } else if (tool === 'place' && mainType === 'DACH') {
     ghostMesh.visible = false;
     if (decorGhostMesh) { scene.remove(decorGhostMesh); decorGhostMesh = null; }
     if (slabGhostMesh && slabGhostMesh.parent) scene.remove(slabGhostMesh);
     if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
+    clearRemoveBoxHighlights();
     if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
+    clearCopyAreaHighlights();
     if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
+    if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+    clearRemoveBoxHighlights();
     updateRoofAimAndGhost();
+  } else if (tool === 'remove' && removeBoxMode) {
+    ghostMesh.visible = false;
+    if (decorGhostMesh) { scene.remove(decorGhostMesh); decorGhostMesh = null; }
+    if (slabGhostMesh && slabGhostMesh.parent) scene.remove(slabGhostMesh);
+    if (roofGhostMesh && roofGhostMesh.parent) scene.remove(roofGhostMesh);
+    if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
+    clearRemoveBoxHighlights();
+    if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
+    clearCopyAreaHighlights();
+    if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
+    updateRemoveBoxAimAndGhost();
   } else {
     if (decorGhostMesh) { scene.remove(decorGhostMesh); decorGhostMesh = null; }
     if (slabGhostMesh && slabGhostMesh.parent) scene.remove(slabGhostMesh);
     if (roofGhostMesh && roofGhostMesh.parent) scene.remove(roofGhostMesh);
     if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
+    clearCopyAreaHighlights();
     if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
+    if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+    clearRemoveBoxHighlights();
     updateAimAndGhost();
   }
   // A slab is a deliberate two-click gesture (mark corner, mark corner) —
   // holding the button must NOT auto-repeat it, or a single press-and-
   // hold would mark both corners almost instantly and fill on its own.
-  if (actionHeld && !(tool === 'place' && isSlabType(mainType)) && tool !== 'copy') doAction();
+  if (actionHeld && !(tool === 'place' && isSlabType(mainType)) && tool !== 'copy' && !(tool === 'remove' && removeBoxMode)) doAction();
   updateAimHint();
   renderer.render(scene, camera);
 }
@@ -6109,6 +7391,8 @@ function fillInfoControls() {
     ['🎨', 'Colour picker next to it'],
     ['📏', 'Bottom bar: pick size'],
     ['🔨/🗑️', 'Bottom bar: Build or Remove'],
+    ['⬛', 'Remove \u2192 Box: drag a rectangle to clear everything inside it, any height'],
+    ['📐', 'Measure tool: tap two points for the distance'],
     ['⚪', 'Big button: place/remove (hold to repeat)'],
     ['⟳', 'Small button on it: rotate'],
     ['🌳', 'Top-left leaf: switch to Deco'],
@@ -6125,6 +7409,8 @@ function fillInfoControls() {
     ['🎨', 'Colour picker next to it'],
     ['1 / 2', 'Switch size'],
     ['🖱️/F', 'Left-click or F: Build/Remove (hold to repeat) \u00b7 Tab/R: rotate'],
+    ['⬛', 'Remove \u2192 Box: drag a rectangle to clear everything inside it, any height'],
+    ['📐', 'Measure tool: click two points for the distance'],
     ['🌳', 'Top-left leaf: switch to Deco'],
     ['↩', 'Undo last action'],
     ['⛶', 'Fullscreen (F11)'],
@@ -6147,10 +7433,28 @@ function fillInfoControls() {
 }
 fillIntro();
 fillInfoControls();
-document.getElementById('startBtn').addEventListener('click', () => {
+// Which team the player picked on the start screen — remembered
+// per-browser (same pattern as the control-mode preference), so it can
+// be relied on for whatever team-specific extras get added later, and
+// so a returning player's card shows as already "chosen" rather than
+// asking them to decide fresh every single visit.
+const TEAM_KEY = 'briqsite_team_v1';
+let selectedTeam = null;
+try { selectedTeam = localStorage.getItem(TEAM_KEY); } catch (e) { /* best-effort */ }
+function markTeamCardChosen() {
+  document.getElementById('teamVkeBtn').classList.toggle('chosen', selectedTeam === 'vke');
+  document.getElementById('teamTriqbriqBtn').classList.toggle('chosen', selectedTeam === 'triqbriq');
+}
+function chooseTeam(team) {
+  selectedTeam = team;
+  try { localStorage.setItem(TEAM_KEY, team); } catch (e) { /* best-effort */ }
+  markTeamCardChosen();
   document.getElementById('introModal').style.display = 'none';
   if (touchUI && !isIOS) toggleFullscreen(); // best-effort, ignored where unsupported
-});
+}
+markTeamCardChosen();
+document.getElementById('teamVkeBtn').addEventListener('click', () => chooseTeam('vke'));
+document.getElementById('teamTriqbriqBtn').addEventListener('click', () => chooseTeam('triqbriq'));
 function closeAllPopups() {
   document.getElementById('typeMenuPanel').classList.remove('show');
   document.getElementById('colorPanel').classList.remove('show');
@@ -6403,6 +7707,35 @@ function makeSlotRow(name, ts, opts) {
   if (opts.onClick) row.addEventListener('click', opts.onClick);
   return row;
 }
+// A reusable in-game replacement for the browser's native confirm() —
+// used for every "are you sure?" prompt EXCEPT the level-start one
+// (which has its own dedicated modal further down, since it also needs
+// to skip itself entirely under one specific condition). A native
+// confirm()/alert()/prompt() forces the browser's own chrome back on
+// top of the page to display itself, which is what was silently
+// kicking players straight out of fullscreen every single time one of
+// these appeared — an in-game modal doesn't have that side effect at
+// all, since it's just ordinary page content.
+let pendingGenericConfirm = null;
+function showConfirm(title, message, onConfirm) {
+  document.getElementById('genericConfirmTitle').textContent = title;
+  document.getElementById('genericConfirmMessage').textContent = message;
+  pendingGenericConfirm = onConfirm;
+  document.getElementById('genericConfirmModal').style.display = 'flex';
+}
+function closeGenericConfirm() {
+  pendingGenericConfirm = null;
+  document.getElementById('genericConfirmModal').style.display = 'none';
+}
+document.getElementById('genericConfirmCancelBtn').addEventListener('click', closeGenericConfirm);
+document.getElementById('genericConfirmYesBtn').addEventListener('click', () => {
+  const action = pendingGenericConfirm;
+  closeGenericConfirm();
+  if (action) action();
+});
+document.getElementById('genericConfirmModal').addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'genericConfirmModal') closeGenericConfirm();
+});
 function renderSaveModal() {
   const list = document.getElementById('saveSlotList');
   list.innerHTML = '';
@@ -6418,9 +7751,10 @@ function renderSaveModal() {
     list.appendChild(makeSlotRow(slot.name, slot.ts, {
       onClick: () => { document.getElementById('saveNameInput').value = slot.name; },
       onDelete: () => {
-        if (!confirm(`Delete save "${slot.name}"?`)) return;
-        deleteSaveSlot(slot.id);
-        renderSaveModal();
+        showConfirm('Delete save?', `Delete save "${slot.name}"?`, () => {
+          deleteSaveSlot(slot.id);
+          renderSaveModal();
+        });
       },
     }));
   }
@@ -6448,23 +7782,24 @@ function renderLoadModal() {
     list.appendChild(makeSlotRow('🕐 Autosave', autosave.ts, {
       extraClass: 'autosave',
       onClick: () => {
-        if (hasAnyBuild() && !confirm('Load Autosave? This replaces your current build.')) return;
-        applyLoadedData(autosave.data);
-        closeLoadModal();
+        const doLoad = () => { applyLoadedData(autosave.data); closeLoadModal(); };
+        if (hasAnyBuild()) showConfirm('Load Autosave?', 'Load Autosave? This replaces your current build.', doLoad);
+        else doLoad();
       },
     }));
   }
   for (const slot of slots) {
     list.appendChild(makeSlotRow(slot.name, slot.ts, {
       onClick: () => {
-        if (hasAnyBuild() && !confirm(`Load "${slot.name}"? This replaces your current build.`)) return;
-        applyLoadedData(slot.data);
-        closeLoadModal();
+        const doLoad = () => { applyLoadedData(slot.data); closeLoadModal(); };
+        if (hasAnyBuild()) showConfirm('Load save?', `Load "${slot.name}"? This replaces your current build.`, doLoad);
+        else doLoad();
       },
       onDelete: () => {
-        if (!confirm(`Delete save "${slot.name}"?`)) return;
-        deleteSaveSlot(slot.id);
-        renderLoadModal();
+        showConfirm('Delete save?', `Delete save "${slot.name}"?`, () => {
+          deleteSaveSlot(slot.id);
+          renderLoadModal();
+        });
       },
     }));
   }
@@ -6496,9 +7831,7 @@ document.getElementById('loadSlotModal').addEventListener('click', (e) => {
 
 document.getElementById('resetBtn').addEventListener('click', () => {
   if (bricks.size === 0 && placedDecor.length === 0) return; // nothing to reset
-  if (confirm('Start over? This clears every Briq and Deko object you\u2019ve placed and can\u2019t be undone.')) {
-    resetGame();
-  }
+  showConfirm('Start over?', 'Start over? This clears every Briq and Deko object you\u2019ve placed and can\u2019t be undone.', resetGame);
 });
 document.getElementById('undoBtn').addEventListener('click', undoLast);
 
@@ -6581,6 +7914,13 @@ document.getElementById('shareBtn').addEventListener('click', shareScreenshot);
 
 /* ---------------- Boot ---------------- */
 focusOn([WALL_OX_CELLS * CELL_M + 0.5, WALL_OZ_CELLS * CELL_M + 0.15]);
+// The tutorial walkthrough is disabled for now ("coming soon" — see its
+// Menu button) — deliberately not auto-started here any more, and its
+// restart button is disabled too, so it can never run at all right now
+// regardless of whether this browser has "seen" it before. The
+// underlying tutorial code itself is left in place (dormant), same as
+// how the disabled Dach/Bird's-eye buttons keep their own code intact
+// rather than being ripped out, ready for whenever this is re-enabled.
 animate();
 </script>
 </body>

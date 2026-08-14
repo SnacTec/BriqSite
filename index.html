@@ -68,7 +68,7 @@
     padding:10px; box-shadow:var(--shadow); display:none;
   }
   #typeMenuPanel.show{display:block;}
-  #platteBtn, #dachBtn{flex-basis:calc(50% - 3px); width:calc(50% - 3px); height:auto;}
+  #platteBtn{width:100%;}
 
   /* ---------- Colour popup: a curated palette instead of the bulky
      native picker, so there's no scrolling through hue/saturation
@@ -400,7 +400,12 @@
      down) — a browser already refuses clicks on those on its own, no
      custom logic needed. All that's left here is the pointing hand
      itself, plus a slim one-line hint pill — deliberately no big text
-     box, since that's what used to eat into the 3D view on a phone. */
+     box, since that's what used to eat into the 3D view on a phone.
+     Sits just above the tool dock (not up near the top bar, which is
+     where an earlier version placed it) and at reduced opacity — near
+     the tools it's actually guiding the player towards, and light
+     enough to still read the world's own colours/shapes through it
+     rather than blocking that view with a near-solid panel. */
   #tutorialHand{
     position:fixed; z-index:27; font-size:30px; pointer-events:none;
     transform:translate(-50%, -100%); animation: tutorialBob 1s ease-in-out infinite;
@@ -410,12 +415,33 @@
     0%,100%{ transform:translate(-50%, -100%); }
     50%{ transform:translate(-50%, -112%); }
   }
+  /* For a target living in the TOP bar (Deco toggle, hamburger menu,
+     the type/size button) — floating the hand ABOVE it like every
+     bottom-dock target would put it off the top of the screen, or
+     overlapping the very top edge nonsensically. Instead it sits BELOW
+     the target and points upward: the same glyph, just rotated 180°
+     (kept on its own inner span so the rotation and the position/bob
+     animation on the outer element don't fight over the same
+     `transform` property), with its own mirrored bob direction. */
+  #tutorialHand.below{
+    transform:translate(-50%, 0%); animation: tutorialBobBelow 1s ease-in-out infinite;
+  }
+  #tutorialHand.below #tutorialHandGlyph{ display:inline-block; transform:rotate(180deg); }
+  @keyframes tutorialBobBelow{
+    0%,100%{ transform:translate(-50%, 0%); }
+    50%{ transform:translate(-50%, 12%); }
+  }
   #tutorialHint{
-    position:fixed; z-index:27; top:calc(10px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+    position:fixed; z-index:27; bottom:calc(85px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
     display:flex; align-items:center; gap:8px;
-    background:rgba(32,24,15,.97); border:1px solid var(--oak-light); border-radius:20px;
+    background:rgba(32,24,15,.75); border:1px solid var(--oak-light); border-radius:20px;
     padding:7px 8px 7px 14px; box-shadow:var(--shadow);
-    max-width:min(340px, calc(100vw - 24px));
+    /* No fixed pixel cap any more — on a narrow phone screen that cap
+       was the thing FORCING an early wrap onto a second line well
+       before running out of actual screen width to use. Using nearly
+       the full viewport width lets an ordinary one-sentence hint fit
+       on a single line far more often. */
+    max-width:calc(100vw - 24px);
   }
   #tutorialHintText{font-size:12px; color:var(--parchment); line-height:1.3;}
   #tutorialHint .btn, #tutorialHint button{
@@ -734,13 +760,89 @@
     .btn{padding:8px 8px; min-width:38px;}
     #actionBtn{width:64px;height:64px;}
   }
+
+  /* ---------- Desktop UI scale-up ---------- */
+  /* Driven by the same touchUI flag as every control branch elsewhere
+     (see applyUiScale()) rather than a screen-width media query — a
+     touch phone always gets the compact layout it was designed for, and
+     a desktop/mouse session always gets this larger one, regardless of
+     window size. Deliberately does NOT touch #actionBtn, the joystick,
+     or anything else that's phone-only to begin with (those never
+     render in desktop mode at all, so scaling them would be moot). */
+  body.desktop-ui .btn{font-size:14px; padding:11px 14px; min-width:54px; gap:3px;}
+  body.desktop-ui .btn small{font-size:11px;}
+  /* The tool dock specifically needs its own explicit sizing on top of
+     the generic .btn bump above: #toolGroup/#briqGroupSize etc. all
+     have their own FIXED height (40px) so the tool row and the
+     sub-function row always match each other regardless of content —
+     a fixed height is a hard cap, not a floor, so simply enlarging the
+     font without also raising this cap is exactly what left the text
+     cramped right up against the button's own edge. #buildPanel .btn's
+     own padding (5px 10px) also has higher specificity than the plain
+     .btn rule above and was silently overriding it, which needs its
+     own explicit desktop override too. */
+  body.desktop-ui #buildPanel .btn{padding:9px 10px;}
+  body.desktop-ui #buildPanel .rows{gap:6px;}
+  body.desktop-ui #buildPanel .group{gap:4px;}
+  body.desktop-ui #toolGroup .btn{font-size:19px; min-width:44px; height:54px;}
+  body.desktop-ui #toolGroup .btn.active{font-size:16px; min-width:54px;}
+  body.desktop-ui #briqGroupSize .btn, body.desktop-ui #removeGridGroup .btn,
+  body.desktop-ui #roofMaterialGroup .btn, body.desktop-ui #copyGroup .btn, body.desktop-ui #paintGroup .btn{
+    height:54px;
+  }
+  body.desktop-ui #buildPanelToggleBtn{font-size:16px;}
+  body.desktop-ui #colorSwatchDotInline{width:26px; height:26px;}
+  /* Both of these are purely touch conveniences with an already-working
+     desktop equivalent: a real left-click on the canvas already does
+     exactly what the round action button does (see the mousedown
+     listener scoped to !touchUI), and R/Tab already rotate (see the
+     KeyR/Tab handler) — so on desktop these two buttons are pure
+     redundant clutter rather than the only way to trigger either
+     action, and can just be hidden outright. */
+  body.desktop-ui #actionBtn, body.desktop-ui #rotateBtn{display:none;}
+  body.desktop-ui .group-label{font-size:11px;}
+  body.desktop-ui #undoBtn, body.desktop-ui #achievementsBtn, body.desktop-ui #shareBtn,
+  body.desktop-ui #fullscreenBtn, body.desktop-ui #infoBtn, body.desktop-ui #menuBtn{
+    width:46px; height:46px; font-size:22px;
+  }
+  body.desktop-ui #madeByTag{font-size:11px; padding:4px 10px;}
+  body.desktop-ui #madeByTag svg{width:11px; height:11px;}
+  body.desktop-ui .modal{max-width:520px;}
+  body.desktop-ui .modal h2{font-size:26px;}
+  body.desktop-ui .modal .sub{font-size:14px;}
+  body.desktop-ui .modal-footer button, body.desktop-ui .cta{font-size:14px; padding:12px 16px;}
+  body.desktop-ui #saveNameInput, body.desktop-ui #exportNameInput,
+  body.desktop-ui #levelExportIdInput, body.desktop-ui #levelExportNameInput, body.desktop-ui #levelExportDescInput{
+    font-size:14px; padding:10px 12px;
+  }
+  body.desktop-ui .slot-row .slot-name{font-size:15px;}
+  body.desktop-ui .slot-row .slot-date{font-size:12px;}
+  body.desktop-ui .achievement-row .achievement-title, body.desktop-ui .achievement-title{font-size:15px;}
+  body.desktop-ui .achievement-row .achievement-desc{font-size:13px;}
+  body.desktop-ui .achievement-row .achievement-icon{font-size:26px;}
+  body.desktop-ui .level-tile-number{font-size:24px;}
+  body.desktop-ui .level-tile-star{font-size:22px;}
+  body.desktop-ui #tutorialHintText{font-size:14px;}
+  body.desktop-ui #tutorialHint{padding:9px 10px 9px 18px;}
+  body.desktop-ui #tutorialHint .btn, body.desktop-ui #tutorialHint button{font-size:13px; padding:7px 14px;}
+  body.desktop-ui #tutorialHand{font-size:38px;}
+  body.desktop-ui #aimHint{font-size:14px;}
+  body.desktop-ui #measureResult{font-size:14px;}
+  body.desktop-ui #levelHudTitle{font-size:14px;}
+  body.desktop-ui #levelHudProgress{font-size:13px;}
+  body.desktop-ui .team-card-name{font-size:15px;}
+  body.desktop-ui .team-card-tag{font-size:12px;}
+  body.desktop-ui .team-card-logo-emoji{font-size:40px;}
+  body.desktop-ui #teamSelectLabel{font-size:16px;}
+  body.desktop-ui #achievementToast{font-size:13px;}
+  body.desktop-ui #achievementToastTitle{font-size:15px;}
 </style>
 </head>
 <body>
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v1.54</div>
+  <div id="versionLabel">v1.64</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -749,7 +851,7 @@
        than dimming the whole screen — only the specific buttons that
        aren't relevant right now look inactive; the 3D view itself
        always stays completely clear. -->
-  <div id="tutorialHand" style="display:none;">👇</div>
+  <div id="tutorialHand" style="display:none;"><span id="tutorialHandGlyph">👇</span></div>
   <div id="tutorialHint" style="display:none;">
     <span id="tutorialHintText"></span>
     <button id="tutorialNextBtn" style="display:none;">Next</button>
@@ -774,8 +876,7 @@
       <button class="btn" data-type="WS20" data-studded="false">WS20oZ</button>
       <button class="btn active" data-type="WS25" data-studded="true">WS25mZ</button>
       <button class="btn" data-type="WS25" data-studded="false">WS25oZ</button>
-      <button class="btn" id="platteBtn" data-type="PLATTE">Platte</button>
-      <button class="btn" id="dachBtn" data-type="DACH" disabled title="Coming soon">Dach<small>(coming soon)</small></button>
+      <button class="btn" id="platteBtn" data-type="PLATTE">Floor</button>
     </div>
   </div>
   <div id="colorPanel">
@@ -855,7 +956,7 @@
     <div class="group-label" style="margin-top:10px;">Options</div>
     <div class="group">
       <button class="btn wide" id="settingsBtn">⚙️ Settings<small>Sound & controls</small></button>
-      <button class="btn wide" id="tutorialRestartBtn" disabled title="Coming soon">🧱 Tutorial<small>(coming soon)</small></button>
+      <button class="btn wide" id="tutorialRestartBtn">🧱 Tutorial<small>Show again</small></button>
     </div>
     <div class="group-label" style="margin-top:10px;">Share the game</div>
     <div class="group">
@@ -1192,10 +1293,19 @@ try {
 // The single source of truth every touch-vs-desktop control branch below
 // reads from here on, instead of the raw isTouch capability check.
 let touchUI = controlMode === 'auto' ? isTouch : controlMode === 'touch';
+// A larger, easier-to-read UI on a desktop monitor (typically viewed
+// from further away, with a precise mouse pointer rather than a
+// fingertip) — scoped to a body class driven by the SAME touchUI flag
+// everything else already branches on, so it always matches whichever
+// mode the player is actually in (including a live switch in Settings),
+// and never affects the phone layout at all.
+function applyUiScale() { document.body.classList.toggle('desktop-ui', !touchUI); }
+applyUiScale();
 function setControlMode(v) {
   controlMode = v;
   touchUI = controlMode === 'auto' ? isTouch : controlMode === 'touch';
   try { localStorage.setItem(CONTROL_MODE_KEY, controlMode); } catch (e) { /* best-effort — a failed save here just means it won't be remembered next visit */ }
+  applyUiScale();
   setMode(mode); // re-applies joystick/look-layer visibility etc. for the newly-effective mode, without needing a page reload
 }
 
@@ -1219,7 +1329,7 @@ const ACHIEVEMENTS = {
   briqs_100: { icon: '🏗️', title: 'Getting Started', desc: 'Place 100 Briqs in total.' },
   briqs_500: { icon: '🏠', title: 'Builder', desc: 'Place 500 Briqs in total.' },
   briqs_1000: { icon: '🏛️', title: 'Master Builder', desc: 'Place 1000 Briqs in total.' },
-  first_platte: { icon: '⬜', title: 'Flat Out', desc: 'Place your first Platte.' },
+  first_platte: { icon: '⬜', title: 'Flat Out', desc: 'Place your first Floor.' },
   first_deko: { icon: '🌳', title: 'Nice Touch', desc: 'Place your first Deko object.' },
   first_remove: { icon: '🗑️', title: 'Oops, Fixed It', desc: 'Remove a Briq or Deko object.' },
   first_recolour: { icon: '🎨', title: 'A Splash of Colour', desc: 'Recolour a Briq.' },
@@ -3060,7 +3170,7 @@ const BRIQ_CATALOG = {
   // like a wall of its own that happens to match something else's
   // thickness.
   PLATTE: {
-    label: 'Slab', crossCells: 3, isSlab: true, // 15 cm, always
+    label: 'Floor', crossCells: 3, isSlab: true, // 15 cm, always
     sizes: { P: { len: 3 } },
   },
   // A pseudo-type for roof panels — also universal/neutral (isSlab),
@@ -3520,7 +3630,7 @@ function applyType() {
     b.classList.toggle('active', b.dataset.type === mainType && (b.dataset.studded === 'true') === studded);
   });
   document.getElementById('typeMenuLabel').textContent =
-    mainType === 'PLATTE' ? 'Platte' : mainType === 'DACH' ? 'Dach' : `${mainType}${studded ? 'mZ' : 'oZ'}`;
+    mainType === 'PLATTE' ? 'Floor' : mainType === 'DACH' ? 'Roof' : `${mainType}${studded ? 'mZ' : 'oZ'}`;
   updateBriqControlsVisibility();
   updateActionBtnLabel();
 }
@@ -5507,8 +5617,8 @@ function renderPartsList() {
     const label = `${w.mainType} ${sizeLabelFor(w.mainType, w.lengthCells)} (${w.studded ? 'with studs' : 'no studs'})`;
     list.appendChild(makePartsRow(label, w.count));
   }
-  if (bom.plateCount > 0) list.appendChild(makePartsRow(`Slab (Platte) \u2014 ${bom.plateArea.toFixed(2)} m\u00b2 total`, bom.plateCount));
-  if (bom.roofCount > 0) list.appendChild(makePartsRow(`Roof (Dach) \u2014 ${bom.roofArea.toFixed(2)} m\u00b2 total`, bom.roofCount));
+  if (bom.plateCount > 0) list.appendChild(makePartsRow(`Floor \u2014 ${bom.plateArea.toFixed(2)} m\u00b2 total`, bom.plateCount));
+  if (bom.roofCount > 0) list.appendChild(makePartsRow(`Roof \u2014 ${bom.roofArea.toFixed(2)} m\u00b2 total`, bom.roofCount));
   body.appendChild(list);
   const totalRow = document.createElement('div');
   totalRow.style.marginTop = '10px';
@@ -6036,13 +6146,23 @@ const TUTORIAL_STEPS = [
     waitFor: 'build',
   },
   {
+    id: 'types',
+    // Purely informational (no waitFor) — this is about pointing out
+    // where the type/size controls live, not making the player prove
+    // they used them. Forcing an actual size change would also mean
+    // deciding whether that change should persist afterwards or be
+    // reverted, extra complexity a look-and-continue step avoids.
+    text: () => `Tap the type button up top (currently showing something like "WS25mZ") to switch between wall systems, thicknesses, and studded/unstudded. The buttons below it (${touchUI ? '' : 'e.g. '}WS25B25, B50, B200, B400) pick how LONG your next Briq will be.`,
+    waitFor: null,
+  },
+  {
     id: 'recolour',
     // The exact wording here is only ever the FALLBACK shown for a
     // split second before updateTutorialUI() below picks the correct
-    // one of its three actual phases (switch tool / aim / press) —
-    // recolouring a Briq genuinely isn't one single action, and no
-    // single static sentence could describe all three without being
-    // vague about at least one of them.
+    // one of its three actual phases (switch tool / aim / pick a NEW
+    // colour / press) — recolouring a Briq genuinely isn't one single
+    // action, and no single static sentence could describe all four
+    // without being vague about at least one of them.
     text: () => 'Let\u2019s add some colour to that Briq.',
     waitFor: 'recolour',
   },
@@ -6057,8 +6177,23 @@ const TUTORIAL_STEPS = [
     waitFor: 'remove',
   },
   {
+    id: 'copy',
+    text: () => 'The Copy tool (\ud83d\udccb) lets you mark an area and duplicate everything inside it \u2014 handy for repeating walls or whole rooms instead of rebuilding them by hand.',
+    waitFor: null,
+  },
+  {
+    id: 'deco',
+    text: () => 'Tap "Deco" up top to switch to decorations \u2014 trees, lampposts, furniture, and more, placed the same way as Briqs.',
+    waitFor: null,
+  },
+  {
+    id: 'menu',
+    text: () => 'The \u2630 menu has Save/Load and Settings. \ud83c\udfc6 shows your Achievements, and \ud83c\udfaf Levels are guided building challenges \u2014 both worth a look any time.',
+    waitFor: null,
+  },
+  {
     id: 'closing',
-    text: () => 'That\u2019s the basics! There\u2019s also Deko, Platte/Dach, and Copy to discover \u2014 check \ud83c\udfc6 Achievements for ideas any time, and \u2699\ufe0f Settings if you want to change controls. Have fun building!',
+    text: () => 'That\u2019s the basics! There\u2019s also Floors to discover. Have fun building!',
     waitFor: null,
   },
 ];
@@ -6105,8 +6240,17 @@ function setTutorialHandTarget(id) {
   const el = id ? document.getElementById(id) : null;
   if (!el) { hand.style.display = 'none'; return; }
   const r = el.getBoundingClientRect();
+  // A target sitting in the upper part of the screen (the top bar's
+  // Deco toggle, type/size button, hamburger menu, ...) needs the hand
+  // approaching from BELOW it instead of above — see the CSS comment
+  // on #tutorialHand.below for why. Determined by the target's own live
+  // position rather than a fixed list of "top bar" ids, so this keeps
+  // working correctly for any future step without needing to remember
+  // to special-case a new target by hand.
+  const isTopBarTarget = r.top < innerHeight * 0.3;
+  hand.classList.toggle('below', isTopBarTarget);
   hand.style.left = (r.left + r.width / 2) + 'px';
-  hand.style.top = r.top + 'px';
+  hand.style.top = (isTopBarTarget ? r.bottom : r.top) + 'px';
   hand.style.display = 'block';
 }
 window.addEventListener('resize', () => { if (tutorialActive) setTutorialHandTarget(tutorialHandTargetId); });
@@ -6173,10 +6317,36 @@ function updateTutorialUI() {
       setTutorialButtonsEnabled(['colorBtnInline']);
       setTutorialHandTarget(null);
     } else {
-      text = touchUI ? 'Now tap the round button to recolour it.' : 'Now left-click to recolour it.';
-      setTutorialButtonsEnabled(['colorBtnInline']);
-      setTutorialHandTarget('actionBtn');
+      // The player's currently selected colour has to actually DIFFER
+      // from the aimed Briq's own colour for a press to do anything at
+      // all (doPaintAction() is a no-op — and never fires the
+      // 'recolour' event this step is waiting for — when they already
+      // match). Without this check, a player who presses without first
+      // opening the swatch just sees nothing happen, with no clue why.
+      const id = occupancy.get(key(...currentTargetCell));
+      const b = id !== undefined ? bricks.get(id) : null;
+      if (b && b.color === brickColor) {
+        text = 'That Briq is already this colour \u2014 tap the swatch to pick a NEW one first.';
+        setTutorialButtonsEnabled(['colorBtnInline']);
+        setTutorialHandTarget('colorBtnInline');
+      } else {
+        text = touchUI ? 'Now tap the round button to recolour it.' : 'Now left-click to recolour it.';
+        setTutorialButtonsEnabled(['colorBtnInline']);
+        setTutorialHandTarget('actionBtn');
+      }
     }
+  } else if (step.id === 'types') {
+    setTutorialButtonsEnabled(TUTORIAL_MANAGED_BUTTON_IDS);
+    setTutorialHandTarget('typeMenuBtn');
+  } else if (step.id === 'copy') {
+    setTutorialButtonsEnabled(TUTORIAL_MANAGED_BUTTON_IDS);
+    setTutorialHandTarget('toolCopy');
+  } else if (step.id === 'deco') {
+    setTutorialButtonsEnabled(TUTORIAL_MANAGED_BUTTON_IDS);
+    setTutorialHandTarget('modeToggleBtn');
+  } else if (step.id === 'menu') {
+    setTutorialButtonsEnabled(TUTORIAL_MANAGED_BUTTON_IDS);
+    setTutorialHandTarget('menuBtn');
   } else {
     // welcome / closing — nothing to restrict, no button press to point at.
     setTutorialButtonsEnabled(TUTORIAL_MANAGED_BUTTON_IDS);
@@ -7966,13 +8136,14 @@ document.getElementById('shareBtn').addEventListener('click', shareScreenshot);
 
 /* ---------------- Boot ---------------- */
 focusOn([WALL_OX_CELLS * CELL_M + 0.5, WALL_OZ_CELLS * CELL_M + 0.15]);
-// The tutorial walkthrough is disabled for now ("coming soon" — see its
-// Menu button) — deliberately not auto-started here any more, and its
-// restart button is disabled too, so it can never run at all right now
-// regardless of whether this browser has "seen" it before. The
-// underlying tutorial code itself is left in place (dormant), same as
-// how the disabled Dach/Bird's-eye buttons keep their own code intact
-// rather than being ripped out, ready for whenever this is re-enabled.
+// Re-enabled: the hint pill now sits above the tool dock at reduced
+// opacity instead of near the top bar at near-solid opacity, which is
+// what made it feel like it was "taking over" a phone screen before.
+// Everything else about the walkthrough (per-button disabling, the
+// pointing hand, the short 5-step flow) is unchanged from when it was
+// last reviewed. Only ever auto-starts for a browser that hasn't
+// completed (or skipped) it before — markTutorialDone() covers both.
+if (!tutorialDoneBefore()) startTutorial();
 animate();
 </script>
 </body>

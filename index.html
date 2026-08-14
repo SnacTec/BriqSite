@@ -48,13 +48,15 @@
     position:absolute; top:calc(12px + env(safe-area-inset-top)); left:12px; z-index:15;
     display:flex; align-items:stretch; gap:6px;
   }
-  #typeMenuBtn, #modeToggleBtn{
+  #typeMenuBtn, #modeToggleBtn, #exploreModeBtn{
     font-family:'JetBrains Mono', monospace; font-weight:700; font-size:13px;
     color:var(--oak-light); background:rgba(32,24,15,.82); border:1px solid rgba(201,138,75,.5);
     border-radius:9px; padding:0 12px; cursor:pointer; box-shadow:var(--shadow);
     height:38px; display:flex; align-items:center; justify-content:center; gap:5px;
     flex-shrink:0;
   }
+  #exploreModeBtn{width:38px; padding:0; font-size:15px;}
+  #exploreModeBtn.active{background:rgba(201,138,75,.5); color:var(--ink); border-color:var(--oak-light);}
   #modeToggleBtn{color:var(--parchment); font-weight:700;}
   #modeToggleBtn small{font-size:10px; color:inherit; font-weight:700;}
   /* modeToggleBtn deliberately has no .active styling of its own — its
@@ -784,6 +786,23 @@
     #actionBtn{width:64px;height:64px;}
   }
 
+  /* ---------- Explore mode ---------- */
+  /* Walking around with gravity/collision/jumping is a fundamentally
+     different activity from building — the whole build UI (tool dock,
+     crosshair, action button, rotate button) is just noise while
+     exploring, so it's hidden outright rather than merely disabled.
+     A body class (like desktop-ui) rather than direct style.display
+     writes, so it can't drift out of sync with — or get clobbered by —
+     any of the other places that ALSO toggle these same elements'
+     visibility (setMode, the tutorial, Deko mode, and so on all leave
+     their own inline/class state alone; this just layers cleanly on
+     top of it with !important). */
+  body.exploring #dock, body.exploring #crosshair,
+  body.exploring #rotateBtn, body.exploring #topLeftRow #modeToggleBtn,
+  body.exploring #topLeftRow #typeMenuBtn, body.exploring #flyUpBtn, body.exploring #flyDownBtn{
+    display:none !important;
+  }
+
   /* ---------- Desktop UI scale-up ---------- */
   /* Driven by the same touchUI flag as every control branch elsewhere
      (see applyUiScale()) rather than a screen-width media query — a
@@ -865,7 +884,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v1.70</div>
+  <div id="versionLabel">v2.00</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -892,6 +911,7 @@
   <div id="topLeftRow">
     <button id="modeToggleBtn" title="Switch build mode"><span id="modeToggleIcon">🌳</span><small id="modeToggleLabel">Deco</small></button>
     <button id="typeMenuBtn"><span id="typeMenuLabel">WS25mZ</span> ▾</button>
+    <button id="exploreModeBtn" title="Explore mode">▶</button>
   </div>
   <div id="typeMenuPanel">
     <div class="group" id="mainTypeGroup" style="flex-wrap:wrap; max-width:170px;">
@@ -1144,6 +1164,10 @@
         <div class="settings-row">
           <span class="settings-label">Field of view</span>
           <input type="range" id="fovSlider" min="60" max="90" value="68">
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Play area size <small id="worldRadiusLabel"></small></span>
+          <input type="range" id="worldRadiusSlider" min="12" max="300" value="18" step="1">
         </div>
       </div>
       <div class="modal-footer">
@@ -1398,7 +1422,11 @@ const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Soft shadows (PCFSoftShadowMap) sample several times per pixel to get
+// their smooth edge — noticeably more expensive than the harder-edged
+// default, and the phone is exactly where that cost is felt the most.
+// Kept soft on desktop, where there's GPU headroom to spare for it.
+renderer.shadowMap.type = isTouch ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 const SKY_TOP = 0x4f96c9, SKY_BOTTOM = 0xdcefe6;
@@ -1477,7 +1505,12 @@ scene.add(hemiLight);
 const sun = new THREE.DirectionalLight(0xfff2d9, 1.15);
 sun.position.set(18, 26, 10);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+// Halved on touch devices — a shadow map is a full render pass of its
+// own before the main scene even draws, and its cost scales with the
+// square of this number (2048x2048 is 4x the pixels of 1024x1024, not
+// 2x), making resolution one of the single biggest shadow-cost levers
+// available.
+sun.shadow.mapSize.set(isTouch ? 1024 : 2048, isTouch ? 1024 : 2048);
 sun.shadow.camera.left = -26; sun.shadow.camera.right = 26;
 sun.shadow.camera.top = 26; sun.shadow.camera.bottom = -26;
 sun.shadow.camera.far = 80;
@@ -1536,18 +1569,65 @@ document.getElementById('dayNightSlider').addEventListener('input', (e) => {
    from opposite walls and just meet in the middle over the hollow
    interior, with each still resting on its own wall. */
 const CELL_M = 0.05;
+/* ---------------- Explore mode (gravity, jump, real collision) ----------------
+   A second, orthogonal way of moving through the world alongside the
+   normal no-clip "fly anywhere to build" mode — real collision against
+   whatever's actually been built, gravity pulling the player back down,
+   and a jump. The highest placed Briq at any given spot IS the ceiling
+   on how high the player can stand there — there's no flying past it
+   the way build mode allows, only climbing what's actually there.
+   Declared up here (rather than down by the rest of the movement code
+   that actually USES them) purely so `exploreMode` already has a real
+   value by the time updateActionBtnLabel() — called during the very
+   first applyType() at boot — checks it; `let` bindings aren't hoisted
+   with a usable value the way `function` declarations are. */
+let exploreMode = false;
+let playerVelY = 0;
+let exploreGrounded = false;
+let jumpRequested = false;
+const EXPLORE_GRAVITY = -14; // m/s\u00b2 — a bit stronger than real-world gravity, for a snappier arcade feel rather than a slow, floaty fall
+const EXPLORE_JUMP_SPEED = 5.5;
+// Smaller than a "realistic" human radius would suggest — most of this
+// game's own building vocabulary (doorways, staircase treads, gaps)
+// is sized in single 25cm modules, and a wider collision capsule than
+// this made even a single-module-deep stair tread feel narrower than
+// the player's own body, jamming movement in every direction at once
+// rather than just correctly blocking the too-narrow cases.
+const PLAYER_RADIUS_M = 0.15;
+const PLAYER_HEIGHT_M = 1.7;
+// One WS25 module's own course height (25cm), plus a hair of tolerance
+// — exactly the rise of a single step in any staircase built the
+// "normal" way out of this game's own bricks, so climbing one without
+// jumping feels automatic, the way stairs should.
+const STEP_HEIGHT_M = 5 * CELL_M + 0.02;
 const MODULE = 5;
 const HOUSE_W_CELLS = 4 * MODULE, HOUSE_D_CELLS = 4 * MODULE;
 const HOUSE_OX_CELLS = -Math.floor(HOUSE_W_CELLS / 2), HOUSE_OZ_CELLS = -Math.floor(HOUSE_D_CELLS / 2);
-const WORLD_MIN = -18, WORLD_MAX = 18, HEIGHT_MAX = 10; // metres — player/world bounds
-const CELL_BOUND = Math.round(WORLD_MAX / CELL_M);
+const HEIGHT_MAX = 10; // metres — vertical build/fly ceiling, unaffected by the adjustable world radius below
+// The playable radius is adjustable live via Settings (see
+// setWorldRadius) — these two stay `let` rather than `const`
+// specifically so every place that already reads them (the movement
+// clamp, build placement validity) picks up a change immediately with
+// no further wiring needed, exactly as if the world had always been
+// that size.
+const WORLD_RADIUS_MIN = 12, WORLD_RADIUS_MAX = 300; // metres — 12 is the smallest that still comfortably fits every Level's own fixed layout; see setWorldRadius
+const WORLD_RADIUS_KEY = 'briqsite_world_radius_v1';
+let WORLD_MIN = -18, WORLD_MAX = 18;
+let CELL_BOUND = Math.round(WORLD_MAX / CELL_M);
 const CELL_Y_MAX = Math.round((HEIGHT_MAX + 6) / CELL_M);
 const HOUSE_CX_M = (HOUSE_OX_CELLS + HOUSE_W_CELLS / 2) * CELL_M;
 const HOUSE_CZ_M = (HOUSE_OZ_CELLS + HOUSE_D_CELLS / 2) * CELL_M;
 const WALL_OX_CELLS = 30, WALL_OZ_CELLS = -50; // separate practice-wall plot, away from the house
 
 /* ---------------- Ground ---------------- */
-const GROUND_SIZE = 44;
+// Sized directly off the world radius (plus a fixed margin) rather than
+// a flat constant — the ground/grid need to visually reach exactly as
+// far as the player can actually walk, or the boundary would just look
+// like an invisible wall in the middle of what still looks like open
+// ground. Rebuilt (not just scaled) whenever the radius setting
+// changes; see rebuildGroundAndGrid.
+function groundSizeFor(radius) { return radius * 2 + 8; }
+const GROUND_SIZE = groundSizeFor(WORLD_MAX);
 // Generic speckled-texture generator, reused for every biome's ground —
 // only the base colour and speckle palette differ per environment.
 function makeSpeckledTexture(baseHex, speckles, patches) {
@@ -1587,15 +1667,23 @@ function makeGravelTexture() {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   return tex;
 }
+// Deliberately NOT shared via sharedDecorMat — this is one single,
+// long-lived material whose own .map gets swapped out and marked dirty
+// every time the environment changes (see setEnvironment), so it must
+// stay its own unique instance. Sharing it via the generic options-based
+// cache would mean any OTHER decor material that happened to be created
+// with these exact same options (very plausible for something this
+// generic) would silently start rendering the ground texture too the
+// moment it changed.
 const groundMat = new THREE.MeshStandardMaterial({ roughness: 1 });
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE), groundMat);
+let ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE), groundMat);
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = 0;
 ground.receiveShadow = true;
 ground.name = 'ground';
 scene.add(ground);
 
-const grid = new THREE.GridHelper(GROUND_SIZE, GROUND_SIZE, 0x3f5b45, 0x557a5f);
+let grid = new THREE.GridHelper(GROUND_SIZE, GROUND_SIZE, 0x3f5b45, 0x557a5f);
 grid.position.y = 0.012;
 grid.material.opacity = 0.18;
 grid.material.transparent = true;
@@ -1617,17 +1705,52 @@ function farFromWork(x, z) {
   const d2 = Math.hypot(x - (WALL_OX_CELLS * CELL_M + 0.6), z - (WALL_OZ_CELLS * CELL_M + 0.15));
   return d1 > 3 && d2 > 2.5;
 }
+// Ambient/decorative props (trees, animals, beach clutter, furniture,
+// ...) used to each get their own brand-new MeshStandardMaterial
+// instance every time one was built, even for many instances of the
+// exact SAME thing — placing 60 beach props, for instance, meant up to
+// 60 separate (but visually identical) sets of materials the renderer
+// could never batch together. Bricks already solved this properly with
+// their own dedicated per-type cache (getWoodMat); this is the same
+// idea generalised for every OTHER decorative material — keyed by the
+// options object itself (stringified), so any two calls with identical
+// settings automatically end up sharing one instance with no need to
+// invent and remember a separate cache key by hand for each one.
+// Deliberately NOT used for anything whose material gets mutated after
+// creation (the ground plane's own material swaps its texture on every
+// environment change, for instance — see the comment on groundMat) or
+// anything built from a texture map (a Canvas-drawn map is a unique
+// object each time regardless of the same-looking options around it,
+// so it can never actually be meaningfully deduplicated this way).
+const sharedDecorMatCache = {};
+function sharedDecorMat(opts) {
+  const k = JSON.stringify(opts);
+  if (!sharedDecorMatCache[k]) sharedDecorMatCache[k] = new THREE.MeshStandardMaterial(opts);
+  return sharedDecorMatCache[k];
+}
+// Tracks the tallest cell (Y) ever actually built, across every
+// placement path (Briq, Platte, roof) — exploreGroundHeightAt uses
+// this as its own starting point instead of the theoretical world
+// ceiling, which is what made every single ground/ceiling query in
+// Explore mode scan hundreds of empty cells above any realistic build
+// before finding anything. Reset in clearAllBricks, the one shared
+// choke point every "wipe everything" path (Reset, loading a save, a
+// fresh Level) already funnels through.
+let highestBuiltCellY = 0;
+function trackBuiltHeight(cells) {
+  for (const c of cells) if (c[1] > highestBuiltCellY) highestBuiltCellY = c[1];
+}
 function makeConiferTree(x, z) {
   const g = new THREE.Group();
   const trunkH = 1.2 + Math.random() * 0.6;
   const trunk = new THREE.Mesh(
     new THREE.CylinderGeometry(0.11, 0.15, trunkH, 6),
-    new THREE.MeshStandardMaterial({ color: 0x6b4a2c, roughness: 1 })
+    sharedDecorMat({ color: 0x6b4a2c, roughness: 1 })
   );
   trunk.position.y = trunkH / 2;
   trunk.castShadow = true;
   g.add(trunk);
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x3d6b3f, roughness: 0.9 });
+  const leafMat = sharedDecorMat({ color: 0x3d6b3f, roughness: 0.9 });
   const tiers = 3;
   for (let i = 0; i < tiers; i++) {
     const r = 1.05 - i * 0.28, h = 1.1 - i * 0.18;
@@ -1647,13 +1770,13 @@ function makePalmTree(x, z) {
   const trunkH = 1.8 + Math.random() * 0.8;
   const trunk = new THREE.Mesh(
     new THREE.CylinderGeometry(0.07, 0.12, trunkH, 6),
-    new THREE.MeshStandardMaterial({ color: 0x9c7a4a, roughness: 1 })
+    sharedDecorMat({ color: 0x9c7a4a, roughness: 1 })
   );
   trunk.position.y = trunkH / 2;
   trunk.rotation.z = (Math.random() - 0.5) * 0.15;
   trunk.castShadow = true;
   g.add(trunk);
-  const frondMat = new THREE.MeshStandardMaterial({ color: 0x3f8f4a, roughness: 0.85, side: THREE.DoubleSide });
+  const frondMat = sharedDecorMat({ color: 0x3f8f4a, roughness: 0.85, side: THREE.DoubleSide });
   const frondCount = 6;
   for (let i = 0; i < frondCount; i++) {
     const frond = new THREE.Mesh(new THREE.ConeGeometry(0.12, 1.1, 4), frondMat);
@@ -1674,12 +1797,12 @@ function makeJungleTree(x, z) {
   const trunkH = 1.6 + Math.random() * 1.0;
   const trunk = new THREE.Mesh(
     new THREE.CylinderGeometry(0.16, 0.22, trunkH, 6),
-    new THREE.MeshStandardMaterial({ color: 0x5a3d24, roughness: 1 })
+    sharedDecorMat({ color: 0x5a3d24, roughness: 1 })
   );
   trunk.position.y = trunkH / 2;
   trunk.castShadow = true;
   g.add(trunk);
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x2c5c2a, roughness: 0.9 });
+  const leafMat = sharedDecorMat({ color: 0x2c5c2a, roughness: 0.9 });
   for (let i = 0; i < 3; i++) {
     const r = 0.9 - i * 0.12;
     const blob = new THREE.Mesh(new THREE.SphereGeometry(r, 7, 6), leafMat);
@@ -1695,7 +1818,7 @@ function makeJungleTree(x, z) {
 }
 function makeRock(x, z) {
   const g = new THREE.Group();
-  const rockMat = new THREE.MeshStandardMaterial({ color: 0x8b8a86, roughness: 1 });
+  const rockMat = sharedDecorMat({ color: 0x8b8a86, roughness: 1 });
   const r = 0.3 + Math.random() * 0.35;
   const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), rockMat);
   rock.position.y = r * 0.55;
@@ -1709,12 +1832,12 @@ function makeRock(x, z) {
 }
 function makeLampPost(x, z) {
   const g = new THREE.Group();
-  const poleMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3d, roughness: 0.6, metalness: 0.4 });
+  const poleMat = sharedDecorMat({ color: 0x3a3a3d, roughness: 0.6, metalness: 0.4 });
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 2.4, 8), poleMat);
   pole.position.y = 1.2;
   pole.castShadow = true;
   g.add(pole);
-  const headMat = new THREE.MeshStandardMaterial({ color: 0xf3e6b0, emissive: 0xf3e6b0, emissiveIntensity: 0.6, roughness: 0.5 });
+  const headMat = sharedDecorMat({ color: 0xf3e6b0, emissive: 0xf3e6b0, emissiveIntensity: 0.6, roughness: 0.5 });
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), headMat);
   head.position.y = 2.45;
   g.add(head);
@@ -1740,13 +1863,17 @@ function addBackdrop(obj) { scene.add(obj); backdropObjects.push(obj); return ob
 function buildOceanBackdrop() {
   // A big water plane sitting just below the sand, so it only becomes
   // visible past the beach's own edge — a static shore-to-horizon colour
-  // gradient (no wave animation: an earlier version displaced vertices
+  // gradient, with a subtle animated brightness shimmer layered on top
+  // instead of real wave motion (an earlier version displaced vertices
   // over time, but the amplitude pushed peaks above the sand plane
-  // itself, making the sea look like it was flooding the whole island).
+  // itself, making the sea look like it was flooding the whole island —
+  // this stays fragment-only, so the surface itself never actually
+  // moves, just glints, which sidesteps that entirely).
   const mat = new THREE.ShaderMaterial({
     uniforms: {
       shallow: { value: new THREE.Color(0x6fd3c9) },
       deep: { value: new THREE.Color(0x1a5f8f) },
+      time: { value: 0 },
     },
     vertexShader: `
       varying vec2 vXZ;
@@ -1758,22 +1885,75 @@ function buildOceanBackdrop() {
       varying vec2 vXZ;
       uniform vec3 shallow;
       uniform vec3 deep;
+      uniform float time;
       void main() {
         float d = clamp(length(vXZ) / 55.0, 0.0, 1.0);
         vec3 col = mix(shallow, deep, d);
+        // Two overlapping sine fields at different scales/speeds read as
+        // a gentle sparkle/shimmer drifting across the surface, rather
+        // than an obvious single repeating ripple.
+        float shimmer = sin(vXZ.x * 0.35 + time * 0.9) * sin(vXZ.y * 0.4 - time * 0.7) * 0.04
+                       + sin(vXZ.x * 0.9 - time * 1.3) * sin(vXZ.y * 0.8 + time * 1.1) * 0.02;
+        col += shimmer;
         gl_FragColor = vec4(col, 1.0);
       }`,
   });
-  const geo = new THREE.PlaneGeometry(340, 340, 48, 48);
+  // Sized to comfortably exceed even the largest allowed play-area
+  // diameter (WORLD_RADIUS_MAX \u00d7 2), with real margin to spare — this
+  // is a fixed size rather than something rebuilt whenever the radius
+  // slider moves (which fires continuously while dragging), so it's
+  // set up front to already cover the biggest world anyone could ever
+  // actually choose.
+  const geo = new THREE.PlaneGeometry(700, 700, 48, 48);
   const ocean = new THREE.Mesh(geo, mat);
   ocean.rotation.x = -Math.PI / 2;
   ocean.position.y = -0.06;
   addBackdrop(ocean);
+  backdropUpdaters.push((t) => { mat.uniforms.time.value = t; });
+  buildDriftingClouds();
+}
+// A handful of simple low-poly cloud clusters (grouped, slightly
+// squashed spheres) drifting slowly across the sky and wrapping back
+// around once they pass overhead — cheap, and the kind of thing that
+// makes an otherwise-empty sky feel alive without needing a real sky
+// dome/texture system.
+function makeCloud(x, y, z) {
+  const g = new THREE.Group();
+  const mat = sharedDecorMat({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.9 });
+  const puffCount = 4 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < puffCount; i++) {
+    const r = 1.4 + Math.random() * 1.2;
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(r, 7, 5), mat);
+    puff.position.set((i - puffCount / 2) * 1.6 + (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 1.2);
+    puff.scale.y = 0.55;
+    g.add(puff);
+  }
+  g.position.set(x, y, z);
+  return g;
+}
+function buildDriftingClouds() {
+  const CLOUD_COUNT = 7;
+  const clouds = [];
+  for (let i = 0; i < CLOUD_COUNT; i++) {
+    const x = (Math.random() * 2 - 1) * 70;
+    const y = 22 + Math.random() * 10;
+    const z = (Math.random() * 2 - 1) * 70;
+    const cloud = makeCloud(x, y, z);
+    addBackdrop(cloud);
+    clouds.push({ mesh: cloud, speed: 0.4 + Math.random() * 0.5, startX: x });
+  }
+  const WRAP = 90;
+  backdropUpdaters.push((t) => {
+    for (const c of clouds) {
+      const x = c.startX + t * c.speed;
+      c.mesh.position.x = ((x + WRAP) % (WRAP * 2)) - WRAP;
+    }
+  });
 }
 
 function makeMountainMesh(x, z, r, h, hue) {
   const geo = new THREE.ConeGeometry(r, h, 5);
-  const mat = new THREE.MeshStandardMaterial({ color: hue, roughness: 1, flatShading: true });
+  const mat = sharedDecorMat({ color: hue, roughness: 1, flatShading: true });
   const cone = new THREE.Mesh(geo, mat);
   cone.position.set(x, h / 2 - 1.5, z);
   cone.rotation.y = Math.random() * Math.PI;
@@ -1872,6 +2052,8 @@ const PROP_BUILDERS = {
   coniferTree: makeConiferTree, fence: makeFence,
   lampPost: makeLampPost, bench: makeBench, trashCan: makeTrashCan, crate: makeCrate,
   rock: makeRock,
+  shell: makeShell, seaweedClump: makeSeaweedClump, twig: makeTwig, footprints: makeFootprints,
+  driftwoodLog: makeDriftwoodLog, tidePool: makeTidePool, beachPier: makeBeachPier, beachTowelGroup: makeBeachTowelGroup,
 };
 function pickPropKind(propKinds) {
   const r = Math.random();
@@ -1888,14 +2070,32 @@ const ENVIRONMENTS = {
     label: 'Beach',
     sky: [0x6fc2e8, 0xf5ecd2],
     ground: () => makeSpeckledTexture('#e3cf9c', { count: 9000, size: 1.5, alpha: 0.35, rgb: () => [230 + Math.random() * 20, 210 + Math.random() * 20, 160 + Math.random() * 25] }, { count: 12, minR: 10, maxR: 20, rgba: 'rgba(210,190,140,0.18)' }),
-    propCount: 16,
-    // A real beach isn't wall-to-wall palm trees — mostly palms, with the
-    // odd parasol, sandcastle, or bare rock breaking up the tree line.
+    // Raised well past its old value (16) — that count, spread across
+    // the whole ~35x35m buildable area, is what made the beach look
+    // bare no matter how good any individual prop looked. Most of the
+    // extra count below is small, low ground clutter (shells, seaweed,
+    // twigs, footprints) rather than more big landmark objects, so the
+    // buildable area itself fills in with texture without turning into
+    // an obstacle course of palm trees.
+    propCount: 60,
+    // A real beach isn't wall-to-wall palm trees — mostly small ground
+    // clutter (shells, seaweed, driftwood twigs, footprint trails),
+    // with the odd palm, parasol, sandcastle, tide pool, or larger
+    // driftwood log/beach-towel spot breaking up the sand, and rarer
+    // still a small pier reaching toward the water.
     propKinds: [
-      { kind: 'palmTree', weight: 0.62 },
-      { kind: 'parasol', weight: 0.16 },
-      { kind: 'sandcastle', weight: 0.12 },
-      { kind: 'rock', weight: 0.10 },
+      { kind: 'shell', weight: 0.20 },
+      { kind: 'seaweedClump', weight: 0.14 },
+      { kind: 'twig', weight: 0.13 },
+      { kind: 'footprints', weight: 0.12 },
+      { kind: 'palmTree', weight: 0.14 },
+      { kind: 'parasol', weight: 0.05 },
+      { kind: 'sandcastle', weight: 0.04 },
+      { kind: 'rock', weight: 0.04 },
+      { kind: 'tidePool', weight: 0.05 },
+      { kind: 'driftwoodLog', weight: 0.04 },
+      { kind: 'beachTowelGroup', weight: 0.04 },
+      { kind: 'beachPier', weight: 0.01 },
     ],
     buildBackdrop: buildOceanBackdrop,
   },
@@ -2014,7 +2214,7 @@ function snapDecorCoord(v) { return Math.round(v / DECOR_GRID) * DECOR_GRID; }
 
 function makeBush(x, z) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x4c7a3e, roughness: 0.95 });
+  const mat = sharedDecorMat({ color: 0x4c7a3e, roughness: 0.95 });
   const blobs = 3 + Math.floor(Math.random() * 2);
   for (let i = 0; i < blobs; i++) {
     const r = 0.16 + Math.random() * 0.1;
@@ -2029,7 +2229,7 @@ function makeBush(x, z) {
 }
 function makeFlowerBed(x, z) {
   const g = new THREE.Group();
-  const soil = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.3, 0.08, 10), new THREE.MeshStandardMaterial({ color: 0x4a3620, roughness: 1 }));
+  const soil = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.3, 0.08, 10), sharedDecorMat({ color: 0x4a3620, roughness: 1 }));
   soil.position.y = 0.04;
   soil.receiveShadow = true;
   g.add(soil);
@@ -2037,7 +2237,7 @@ function makeFlowerBed(x, z) {
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2 + Math.random() * 0.4;
     const r = 0.1 + Math.random() * 0.12;
-    const flower = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), new THREE.MeshStandardMaterial({ color: petalColors[i % petalColors.length], roughness: 0.7 }));
+    const flower = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), sharedDecorMat({ color: petalColors[i % petalColors.length], roughness: 0.7 }));
     flower.position.set(Math.cos(a) * r, 0.1, Math.sin(a) * r);
     flower.castShadow = true;
     g.add(flower);
@@ -2060,8 +2260,8 @@ function makePathTile(x, z) {
 /* ---------------- 15 additional Deko builders ---------------- */
 function makeBench(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.85 });
-  const metal = new THREE.MeshStandardMaterial({ color: 0x2c2c2c, roughness: 0.6, metalness: 0.3 });
+  const wood = sharedDecorMat({ color: 0x8a5a34, roughness: 0.85 });
+  const metal = sharedDecorMat({ color: 0x2c2c2c, roughness: 0.6, metalness: 0.3 });
   const seat = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.05, 0.4), wood);
   seat.position.y = 0.42;
   seat.castShadow = true; seat.receiveShadow = true;
@@ -2082,8 +2282,8 @@ function makeBench(x, z) {
 }
 function makeFountain(x, z) {
   const g = new THREE.Group();
-  const stone = new THREE.MeshStandardMaterial({ color: 0xb7ab97, roughness: 0.9 });
-  const water = new THREE.MeshStandardMaterial({ color: 0x4fa8d8, roughness: 0.2, metalness: 0.1 });
+  const stone = sharedDecorMat({ color: 0xb7ab97, roughness: 0.9 });
+  const water = sharedDecorMat({ color: 0x4fa8d8, roughness: 0.2, metalness: 0.1 });
   const basin = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.45, 0.22, 16), stone);
   basin.position.y = 0.11;
   basin.castShadow = true; basin.receiveShadow = true;
@@ -2105,7 +2305,7 @@ function makeFountain(x, z) {
 }
 function makeFence(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x9a6a3f, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0x9a6a3f, roughness: 0.9 });
   for (const px of [-0.55, 0.55]) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.6, 0.07), wood);
     post.position.set(px, 0.3, 0);
@@ -2124,7 +2324,7 @@ function makeFence(x, z) {
 }
 function makeTrashCan(x, z) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x3d4a3d, roughness: 0.6, metalness: 0.35 });
+  const mat = sharedDecorMat({ color: 0x3d4a3d, roughness: 0.6, metalness: 0.35 });
   const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.15, 0.5, 12), mat);
   body.position.y = 0.25;
   body.castShadow = true; body.receiveShadow = true;
@@ -2139,9 +2339,9 @@ function makeTrashCan(x, z) {
 }
 function makeParasol(x, z) {
   const g = new THREE.Group();
-  const poleMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.4 });
+  const poleMat = sharedDecorMat({ color: 0xcccccc, roughness: 0.5, metalness: 0.4 });
   const canopyColors = [0xd9534f, 0xf0c33c, 0x4fa8d8, 0xe8e8e8];
-  const canopyMat = new THREE.MeshStandardMaterial({ color: canopyColors[Math.floor(Math.random() * canopyColors.length)], roughness: 0.7 });
+  const canopyMat = sharedDecorMat({ color: canopyColors[Math.floor(Math.random() * canopyColors.length)], roughness: 0.7 });
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.7, 8), poleMat);
   pole.position.y = 0.85;
   pole.castShadow = true;
@@ -2156,8 +2356,8 @@ function makeParasol(x, z) {
 }
 function makeLounger(x, z) {
   const g = new THREE.Group();
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0xcfcfcf, roughness: 0.5, metalness: 0.3 });
-  const fabricMat = new THREE.MeshStandardMaterial({ color: 0x4fa8d8, roughness: 0.8 });
+  const frameMat = sharedDecorMat({ color: 0xcfcfcf, roughness: 0.5, metalness: 0.3 });
+  const fabricMat = sharedDecorMat({ color: 0x4fa8d8, roughness: 0.8 });
   const base = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.04, 1.5), fabricMat);
   base.position.y = 0.22;
   base.castShadow = true; base.receiveShadow = true;
@@ -2178,8 +2378,8 @@ function makeLounger(x, z) {
 }
 function makeBarrel(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.85 });
-  const band = new THREE.MeshStandardMaterial({ color: 0x2c2c2c, roughness: 0.6, metalness: 0.3 });
+  const wood = sharedDecorMat({ color: 0x8a5a34, roughness: 0.85 });
+  const band = sharedDecorMat({ color: 0x2c2c2c, roughness: 0.6, metalness: 0.3 });
   const body = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.24, 0.55, 12), wood);
   body.position.y = 0.275;
   body.castShadow = true; body.receiveShadow = true;
@@ -2195,7 +2395,7 @@ function makeBarrel(x, z) {
 }
 function makeCrate(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0xa5763f, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0xa5763f, roughness: 0.9 });
   const crate = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, 0.45), wood);
   crate.position.y = 0.225;
   crate.castShadow = true; crate.receiveShadow = true;
@@ -2209,7 +2409,7 @@ function makeCrate(x, z) {
 }
 function makeCactus(x, z) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x4c7a4a, roughness: 0.9 });
+  const mat = sharedDecorMat({ color: 0x4c7a4a, roughness: 0.9 });
   const h = 0.7 + Math.random() * 0.4;
   const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, h, 10), mat);
   trunk.position.y = h / 2;
@@ -2229,8 +2429,8 @@ function makeCactus(x, z) {
 }
 function makeMushroom(x, z) {
   const g = new THREE.Group();
-  const stemMat = new THREE.MeshStandardMaterial({ color: 0xece0c8, roughness: 0.8 });
-  const capMat = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.7 });
+  const stemMat = sharedDecorMat({ color: 0xece0c8, roughness: 0.8 });
+  const capMat = sharedDecorMat({ color: 0xc0392b, roughness: 0.7 });
   const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.22, 8), stemMat);
   stem.position.y = 0.11;
   stem.castShadow = true;
@@ -2245,8 +2445,8 @@ function makeMushroom(x, z) {
 }
 function makeFlowerPot(x, z) {
   const g = new THREE.Group();
-  const potMat = new THREE.MeshStandardMaterial({ color: 0xb5642f, roughness: 0.9 });
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x4c7a3e, roughness: 0.9 });
+  const potMat = sharedDecorMat({ color: 0xb5642f, roughness: 0.9 });
+  const leafMat = sharedDecorMat({ color: 0x4c7a3e, roughness: 0.9 });
   const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.22, 10), potMat);
   pot.position.y = 0.11;
   pot.castShadow = true; pot.receiveShadow = true;
@@ -2262,7 +2462,7 @@ function makeFlowerPot(x, z) {
 }
 function makeHayBale(x, z) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0xd6b64a, roughness: 1 });
+  const mat = sharedDecorMat({ color: 0xd6b64a, roughness: 1 });
   const bale = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.55, 12), mat);
   bale.rotation.z = Math.PI / 2;
   bale.position.y = 0.32;
@@ -2274,8 +2474,8 @@ function makeHayBale(x, z) {
 }
 function makeTikiTorch(x, z) {
   const g = new THREE.Group();
-  const poleMat = new THREE.MeshStandardMaterial({ color: 0x5a3d24, roughness: 0.9 });
-  const flameMat = new THREE.MeshStandardMaterial({ color: 0xf0a030, emissive: 0xf0a030, emissiveIntensity: 0.7, roughness: 0.5 });
+  const poleMat = sharedDecorMat({ color: 0x5a3d24, roughness: 0.9 });
+  const flameMat = sharedDecorMat({ color: 0xf0a030, emissive: 0xf0a030, emissiveIntensity: 0.7, roughness: 0.5 });
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 1.3, 8), poleMat);
   pole.position.y = 0.65;
   pole.castShadow = true;
@@ -2292,7 +2492,7 @@ function makeTikiTorch(x, z) {
   return g;
 }
 function makeSteppingStone(x, z) {
-  const mat = new THREE.MeshStandardMaterial({ color: 0x9a9488, roughness: 0.95 });
+  const mat = sharedDecorMat({ color: 0x9a9488, roughness: 0.95 });
   const r = 0.24 + Math.random() * 0.06;
   const stone = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.9, 0.06, 9), mat);
   stone.position.set(x, 0.03, z);
@@ -2302,9 +2502,182 @@ function makeSteppingStone(x, z) {
   stone.userData.collideRadius = 0.02;
   return stone;
 }
+/* ---------------- Beach ambience: fine ground clutter + shore variety ---------------- */
+// Small, low, non-intrusive detail objects — spread thinly across the
+// WHOLE buildable area (not just the far edges), unlike the big
+// landmark props (palms, parasols), which is what actually made the
+// beach look bare: 16 big widely-spaced things over a ~35x35m area
+// reads as empty no matter how nice each one looks on its own.
+function makeShell(x, z) {
+  const g = new THREE.Group();
+  const mat = sharedDecorMat({ color: 0xf2e6d5, roughness: 0.6 });
+  const innerMat = sharedDecorMat({ color: 0xe0a898, roughness: 0.5 });
+  const shell = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 5, 0, Math.PI * 2, 0, Math.PI * 0.55), mat);
+  shell.rotation.x = Math.PI;
+  shell.scale.set(1, 0.6, 1);
+  // No shadow — a shell this size (5cm) casts a shadow too small to
+  // notice, but the shadow PASS still costs something to render for
+  // every single one regardless of how visible the result actually is,
+  // and there can easily be dozens scattered across a beach.
+  g.add(shell);
+  const inner = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 4, 0, Math.PI * 2, 0, Math.PI * 0.5), innerMat);
+  inner.rotation.x = Math.PI;
+  inner.scale.set(1, 0.5, 1);
+  inner.position.y = 0.005;
+  g.add(inner);
+  g.position.set(x, 0.01, z);
+  // Kept at least as big as the worst-case gap building a Briq over it
+  // can leave (bricks snap to a 25cm module grid, which can land the
+  // brick's own centre up to ~12.5cm from the prop's exact spot) — any
+  // smaller and "build over it to clear it away" stops being reliable.
+  g.userData.collideRadius = 0.16;
+  return g;
+}
+function makeSeaweedClump(x, z) {
+  const g = new THREE.Group();
+  const mat = sharedDecorMat({ color: 0x2e5c3a, roughness: 0.95 });
+  const strands = 4 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < strands; i++) {
+    const len = 0.08 + Math.random() * 0.08;
+    const strand = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, len, 4), mat);
+    strand.position.set((Math.random() - 0.5) * 0.08, len / 2 * 0.4, (Math.random() - 0.5) * 0.08);
+    strand.rotation.z = (Math.random() - 0.5) * 1.2;
+    strand.rotation.x = (Math.random() - 0.5) * 0.6;
+    g.add(strand);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.16;
+  return g;
+}
+function makeTwig(x, z) {
+  const g = new THREE.Group();
+  const mat = sharedDecorMat({ color: 0x8a7455, roughness: 1 });
+  const len = 0.15 + Math.random() * 0.15;
+  const twig = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, len, 5), mat);
+  twig.rotation.z = Math.PI / 2;
+  twig.rotation.y = Math.random() * Math.PI;
+  twig.position.y = 0.014;
+  // No shadow — same reasoning as the shell above: too small to notice, not too small to cost something to render.
+  g.add(twig);
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.16;
+  return g;
+}
+function makeFootprints(x, z) {
+  const g = new THREE.Group();
+  const mat = sharedDecorMat({ color: 0xc9ac78, roughness: 1 });
+  const dir = Math.random() * Math.PI * 2;
+  for (let i = 0; i < 4; i++) {
+    const print = new THREE.Mesh(new THREE.CircleGeometry(0.035, 8), mat);
+    print.rotation.x = -Math.PI / 2;
+    const along = i * 0.22;
+    const side = (i % 2 === 0 ? -1 : 1) * 0.07;
+    print.position.set(Math.cos(dir) * along + Math.sin(dir) * side, 0.002, Math.sin(dir) * along - Math.cos(dir) * side);
+    g.add(print);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.4; // spans a small walking stride, not just one print
+  return g;
+}
+function makeDriftwoodLog(x, z) {
+  const g = new THREE.Group();
+  const mat = sharedDecorMat({ color: 0x7a6752, roughness: 1 });
+  const len = 0.7 + Math.random() * 0.5;
+  const log = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, len, 8), mat);
+  log.rotation.z = Math.PI / 2;
+  log.position.y = 0.08;
+  log.castShadow = true; log.receiveShadow = true;
+  g.add(log);
+  // A couple of knots/branch stubs break up the smooth cylinder.
+  for (let i = 0; i < 2; i++) {
+    const knot = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 5), mat);
+    knot.position.set((Math.random() - 0.5) * len * 0.7, 0.1, 0.06);
+    g.add(knot);
+  }
+  g.rotation.y = Math.random() * Math.PI;
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = len * 0.5;
+  return g;
+}
+function makeTidePool(x, z) {
+  const g = new THREE.Group();
+  const waterMat = sharedDecorMat({ color: 0x6fc2c9, roughness: 0.3, transparent: true, opacity: 0.75 });
+  const rimMat = sharedDecorMat({ color: 0x8f8a7c, roughness: 1 });
+  const r = 0.35 + Math.random() * 0.2;
+  const water = new THREE.Mesh(new THREE.CircleGeometry(r, 16), waterMat);
+  water.rotation.x = -Math.PI / 2;
+  water.position.y = 0.012;
+  g.add(water);
+  const rockCount = 4 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < rockCount; i++) {
+    const a = (i / rockCount) * Math.PI * 2 + Math.random() * 0.4;
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.04 + Math.random() * 0.03, 0), rimMat);
+    rock.position.set(Math.cos(a) * r * 0.95, 0.02, Math.sin(a) * r * 0.95);
+    rock.rotation.set(Math.random(), Math.random(), Math.random());
+    rock.castShadow = true;
+    g.add(rock);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = r + 0.1;
+  return g;
+}
+function makeBeachPier(x, z) {
+  const g = new THREE.Group();
+  const wood = sharedDecorMat({ color: 0x6b4a30, roughness: 0.9 });
+  const plankLen = 2.4, plankW = 0.8;
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(plankW, 0.06, plankLen), wood);
+  deck.position.y = 0.32;
+  deck.castShadow = true; deck.receiveShadow = true;
+  g.add(deck);
+  // A few visible plank seams, purely cosmetic.
+  for (let i = -1; i <= 1; i++) {
+    const seam = new THREE.Mesh(new THREE.BoxGeometry(plankW, 0.01, 0.01), sharedDecorMat({ color: 0x4a331f }));
+    seam.position.set(0, 0.356, i * plankLen * 0.28);
+    g.add(seam);
+  }
+  const postPositions = [[-plankW / 2 + 0.08, -plankLen / 2 + 0.15], [plankW / 2 - 0.08, -plankLen / 2 + 0.15],
+    [-plankW / 2 + 0.08, 0], [plankW / 2 - 0.08, 0],
+    [-plankW / 2 + 0.08, plankLen / 2 - 0.15], [plankW / 2 - 0.08, plankLen / 2 - 0.15]];
+  for (const [px, pz] of postPositions) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.42, 6), wood);
+    post.position.set(px, 0.09, pz);
+    post.castShadow = true;
+    g.add(post);
+  }
+  g.rotation.y = Math.random() * Math.PI;
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = plankLen * 0.55;
+  return g;
+}
+function makeBeachTowelGroup(x, z) {
+  const g = new THREE.Group();
+  const colors = [0xd9534f, 0x3a6b9c, 0xe0b23a, 0x4a8a5c, 0xd9534f];
+  const stripeMat = sharedDecorMat({ color: 0xf2ede0, roughness: 0.9 });
+  const towelColor = colors[Math.floor(Math.random() * colors.length)];
+  const towel = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.012, 0.95), sharedDecorMat({ color: towelColor, roughness: 0.85 }));
+  towel.position.y = 0.008;
+  towel.rotation.y = Math.random() * Math.PI;
+  towel.castShadow = false; towel.receiveShadow = true;
+  g.add(towel);
+  for (const off of [-0.28, 0, 0.28]) {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.014, 0.08), stripeMat);
+    stripe.position.set(0, 0.009, off);
+    stripe.rotation.y = towel.rotation.y;
+    g.add(stripe);
+  }
+  // A small bag propped beside it.
+  const bag = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.1), sharedDecorMat({ color: 0x8a5a3c, roughness: 0.9 }));
+  bag.position.set(Math.cos(towel.rotation.y + 1) * 0.4, 0.07, Math.sin(towel.rotation.y + 1) * 0.4);
+  bag.castShadow = true;
+  g.add(bag);
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.55;
+  return g;
+}
+
 function makeSandcastle(x, z) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0xe0c28a, roughness: 1 });
+  const mat = sharedDecorMat({ color: 0xe0c28a, roughness: 1 });
   const tiers = [[0.32, 0.18], [0.22, 0.16], [0.13, 0.14]];
   let y = 0;
   for (const [r, h] of tiers) {
@@ -2314,10 +2687,10 @@ function makeSandcastle(x, z) {
     g.add(tier);
     y += h;
   }
-  const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.2, 4), new THREE.MeshStandardMaterial({ color: 0x5a3d24 }));
+  const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.2, 4), sharedDecorMat({ color: 0x5a3d24 }));
   flagPole.position.y = y + 0.1;
   g.add(flagPole);
-  const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.07), new THREE.MeshStandardMaterial({ color: 0xd9534f, side: THREE.DoubleSide }));
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.07), sharedDecorMat({ color: 0xd9534f, side: THREE.DoubleSide }));
   flag.position.set(0.05, y + 0.16, 0);
   g.add(flag);
   g.position.set(x, 0, z);
@@ -2328,10 +2701,10 @@ function makeSandcastle(x, z) {
 // ===== Interior furniture =====
 function makeBett(x, z) {
   const g = new THREE.Group();
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.85 });
-  const mattressMat = new THREE.MeshStandardMaterial({ color: 0xece3d2, roughness: 0.9 });
-  const pillowMat = new THREE.MeshStandardMaterial({ color: 0xf7f3ea, roughness: 0.9 });
-  const blanketMat = new THREE.MeshStandardMaterial({ color: 0x7a94a8, roughness: 0.85 });
+  const frameMat = sharedDecorMat({ color: 0x6b4226, roughness: 0.85 });
+  const mattressMat = sharedDecorMat({ color: 0xece3d2, roughness: 0.9 });
+  const pillowMat = sharedDecorMat({ color: 0xf7f3ea, roughness: 0.9 });
+  const blanketMat = sharedDecorMat({ color: 0x7a94a8, roughness: 0.85 });
   const frame = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.28, 2.0), frameMat);
   frame.position.y = 0.14;
   frame.castShadow = true; frame.receiveShadow = true;
@@ -2360,8 +2733,8 @@ function makeBett(x, z) {
 }
 function makeSofa(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.85 });
-  const fabric = new THREE.MeshStandardMaterial({ color: 0x5b7386, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0x6b4226, roughness: 0.85 });
+  const fabric = sharedDecorMat({ color: 0x5b7386, roughness: 0.9 });
   const seat = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.32, 0.7), fabric);
   seat.position.y = 0.3;
   seat.castShadow = true; seat.receiveShadow = true;
@@ -2387,8 +2760,8 @@ function makeSofa(x, z) {
 }
 function makeSessel(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.85 });
-  const fabric = new THREE.MeshStandardMaterial({ color: 0xa85c3f, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0x6b4226, roughness: 0.85 });
+  const fabric = sharedDecorMat({ color: 0xa85c3f, roughness: 0.9 });
   const seat = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.3, 0.6), fabric);
   seat.position.y = 0.3;
   seat.castShadow = true; seat.receiveShadow = true;
@@ -2414,7 +2787,7 @@ function makeSessel(x, z) {
 }
 function makeEsstisch(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x7a5233, roughness: 0.8 });
+  const wood = sharedDecorMat({ color: 0x7a5233, roughness: 0.8 });
   const top = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.06, 0.85), wood);
   top.position.y = 0.74;
   top.castShadow = true; top.receiveShadow = true;
@@ -2431,7 +2804,7 @@ function makeEsstisch(x, z) {
 }
 function makeStuhl(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x7a5233, roughness: 0.8 });
+  const wood = sharedDecorMat({ color: 0x7a5233, roughness: 0.8 });
   const seat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.05, 0.42), wood);
   seat.position.y = 0.46;
   seat.castShadow = true; seat.receiveShadow = true;
@@ -2452,8 +2825,8 @@ function makeStuhl(x, z) {
 }
 function makeKleiderschrank(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3220, roughness: 0.8 });
-  const trim = new THREE.MeshStandardMaterial({ color: 0x2c2c2c, roughness: 0.6, metalness: 0.4 });
+  const wood = sharedDecorMat({ color: 0x4a3220, roughness: 0.8 });
+  const trim = sharedDecorMat({ color: 0x2c2c2c, roughness: 0.6, metalness: 0.4 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.7, 0.55), wood);
   body.position.y = 0.85;
   body.castShadow = true; body.receiveShadow = true;
@@ -2473,7 +2846,7 @@ function makeKleiderschrank(x, z) {
 }
 function makeBuecherregal(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.85 });
+  const wood = sharedDecorMat({ color: 0x6b4226, roughness: 0.85 });
   const bookColors = [0xa8443a, 0x3a6b9c, 0x4a8a5c, 0xd0a340, 0x7a4a9c];
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.5, 0.3), wood);
   body.position.y = 0.75;
@@ -2481,7 +2854,7 @@ function makeBuecherregal(x, z) {
   g.add(body);
   for (let i = 0; i < 3; i++) {
     const shelfY = 0.35 + i * 0.5;
-    const books = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.28, 0.2), new THREE.MeshStandardMaterial({ color: bookColors[i % bookColors.length], roughness: 0.8 }));
+    const books = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.28, 0.2), sharedDecorMat({ color: bookColors[i % bookColors.length], roughness: 0.8 }));
     books.position.set(0, shelfY, 0.02);
     books.castShadow = true;
     g.add(books);
@@ -2492,9 +2865,9 @@ function makeBuecherregal(x, z) {
 }
 function makeKamin(x, z) {
   const g = new THREE.Group();
-  const stone = new THREE.MeshStandardMaterial({ color: 0x8f8578, roughness: 0.95 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x201a16, roughness: 0.9 });
-  const fire = new THREE.MeshStandardMaterial({ color: 0xff7a2e, emissive: 0xff5500, emissiveIntensity: 0.7, roughness: 0.6 });
+  const stone = sharedDecorMat({ color: 0x8f8578, roughness: 0.95 });
+  const dark = sharedDecorMat({ color: 0x201a16, roughness: 0.9 });
+  const fire = sharedDecorMat({ color: 0xff7a2e, emissive: 0xff5500, emissiveIntensity: 0.7, roughness: 0.6 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.1, 0.5), stone);
   body.position.y = 0.55;
   body.castShadow = true; body.receiveShadow = true;
@@ -2515,8 +2888,8 @@ function makeKamin(x, z) {
 }
 function makeTeppich(x, z) {
   const g = new THREE.Group();
-  const base = new THREE.MeshStandardMaterial({ color: 0x9c4a3f, roughness: 0.95 });
-  const border = new THREE.MeshStandardMaterial({ color: 0xd8c9a0, roughness: 0.95 });
+  const base = sharedDecorMat({ color: 0x9c4a3f, roughness: 0.95 });
+  const border = sharedDecorMat({ color: 0xd8c9a0, roughness: 0.95 });
   const rug = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.02, 1.0), base);
   rug.position.y = 0.011;
   rug.receiveShadow = true;
@@ -2531,8 +2904,8 @@ function makeTeppich(x, z) {
 }
 function makeStehlampe(x, z) {
   const g = new THREE.Group();
-  const metal = new THREE.MeshStandardMaterial({ color: 0x2c2c2c, roughness: 0.5, metalness: 0.4 });
-  const shade = new THREE.MeshStandardMaterial({ color: 0xf3e4bb, emissive: 0xf3e4bb, emissiveIntensity: 0.4, roughness: 0.7 });
+  const metal = sharedDecorMat({ color: 0x2c2c2c, roughness: 0.5, metalness: 0.4 });
+  const shade = sharedDecorMat({ color: 0xf3e4bb, emissive: 0xf3e4bb, emissiveIntensity: 0.4, roughness: 0.7 });
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.17, 0.04, 12), metal);
   base.position.y = 0.02;
   base.castShadow = true;
@@ -2550,9 +2923,9 @@ function makeStehlampe(x, z) {
 }
 function makeFernseher(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3220, roughness: 0.8 });
-  const screenFrame = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4, metalness: 0.3 });
-  const screen = new THREE.MeshStandardMaterial({ color: 0x0d1a2e, roughness: 0.2, metalness: 0.2 });
+  const wood = sharedDecorMat({ color: 0x4a3220, roughness: 0.8 });
+  const screenFrame = sharedDecorMat({ color: 0x1a1a1a, roughness: 0.4, metalness: 0.3 });
+  const screen = sharedDecorMat({ color: 0x0d1a2e, roughness: 0.2, metalness: 0.2 });
   const stand = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.42, 0.35), wood);
   stand.position.y = 0.21;
   stand.castShadow = true; stand.receiveShadow = true;
@@ -2570,8 +2943,8 @@ function makeFernseher(x, z) {
 }
 function makeNachttisch(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.85 });
-  const trim = new THREE.MeshStandardMaterial({ color: 0x2c2c2c, roughness: 0.6, metalness: 0.4 });
+  const wood = sharedDecorMat({ color: 0x6b4226, roughness: 0.85 });
+  const trim = sharedDecorMat({ color: 0x2c2c2c, roughness: 0.6, metalness: 0.4 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.4), wood);
   body.position.y = 0.25;
   body.castShadow = true; body.receiveShadow = true;
@@ -2586,8 +2959,8 @@ function makeNachttisch(x, z) {
 }
 function makeSpiegel(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8f7048, roughness: 0.7 });
-  const glass = new THREE.MeshStandardMaterial({ color: 0xb9d3de, roughness: 0.1, metalness: 0.6 });
+  const wood = sharedDecorMat({ color: 0x8f7048, roughness: 0.7 });
+  const glass = sharedDecorMat({ color: 0xb9d3de, roughness: 0.1, metalness: 0.6 });
   const frame = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.1, 0.05), wood);
   frame.position.y = 0.75;
   frame.castShadow = true; frame.receiveShadow = true;
@@ -2605,8 +2978,8 @@ function makeSpiegel(x, z) {
 }
 function makeBadewanne(x, z) {
   const g = new THREE.Group();
-  const porcelain = new THREE.MeshStandardMaterial({ color: 0xf0efe9, roughness: 0.3, metalness: 0.05 });
-  const inner = new THREE.MeshStandardMaterial({ color: 0xd7e9ef, roughness: 0.2 });
+  const porcelain = sharedDecorMat({ color: 0xf0efe9, roughness: 0.3, metalness: 0.05 });
+  const inner = sharedDecorMat({ color: 0xd7e9ef, roughness: 0.2 });
   const outer = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.55, 0.75), porcelain);
   outer.position.y = 0.28;
   outer.castShadow = true; outer.receiveShadow = true;
@@ -2614,7 +2987,7 @@ function makeBadewanne(x, z) {
   const basin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.35, 0.55), inner);
   basin.position.y = 0.42;
   g.add(basin);
-  const faucet = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.18, 6), new THREE.MeshStandardMaterial({ color: 0xb0b0b0, metalness: 0.7, roughness: 0.3 }));
+  const faucet = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.18, 6), sharedDecorMat({ color: 0xb0b0b0, metalness: 0.7, roughness: 0.3 }));
   faucet.position.set(-0.75, 0.65, 0);
   g.add(faucet);
   g.position.set(x, 0, z);
@@ -2625,7 +2998,7 @@ function makeBadewanne(x, z) {
 // ===== Garden additions =====
 function makeGartenzaunKlein(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0xdcd3ba, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0xdcd3ba, roughness: 0.9 });
   for (const px of [-0.5, 0, 0.5]) {
     const picket = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.35, 0.03), wood);
     picket.position.set(px, 0.175, 0);
@@ -2642,7 +3015,7 @@ function makeGartenzaunKlein(x, z) {
 }
 function makeGartenzaunGross(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x7a5233, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0x7a5233, roughness: 0.9 });
   for (const px of [-0.55, 0.55]) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.3, 0.09), wood);
     post.position.set(px, 0.65, 0);
@@ -2663,7 +3036,7 @@ function makeGartenzaunGross(x, z) {
 }
 function makeGartentor(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x7a5233, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0x7a5233, roughness: 0.9 });
   for (const px of [-0.55, 0.55]) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.1, 0.1), wood);
     post.position.set(px, 0.55, 0);
@@ -2687,8 +3060,8 @@ function makeGartentor(x, z) {
 }
 function makePool(x, z) {
   const g = new THREE.Group();
-  const tile = new THREE.MeshStandardMaterial({ color: 0xe8e3d8, roughness: 0.8 });
-  const water = new THREE.MeshStandardMaterial({ color: 0x3a9bc4, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.9 });
+  const tile = sharedDecorMat({ color: 0xe8e3d8, roughness: 0.8 });
+  const water = sharedDecorMat({ color: 0x3a9bc4, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.9 });
   const rim = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.1, 1.8), tile);
   rim.position.y = 0.05;
   rim.receiveShadow = true;
@@ -2702,8 +3075,8 @@ function makePool(x, z) {
 }
 function makeGrill(x, z) {
   const g = new THREE.Group();
-  const black = new THREE.MeshStandardMaterial({ color: 0x2c2c2c, roughness: 0.5, metalness: 0.3 });
-  const coal = new THREE.MeshStandardMaterial({ color: 0x4a3a30, roughness: 0.9 });
+  const black = sharedDecorMat({ color: 0x2c2c2c, roughness: 0.5, metalness: 0.3 });
+  const coal = sharedDecorMat({ color: 0x4a3a30, roughness: 0.9 });
   const body = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.3, 0.35, 12), black);
   body.position.y = 0.65;
   body.castShadow = true; body.receiveShadow = true;
@@ -2726,8 +3099,8 @@ function makeGrill(x, z) {
 }
 function makeGartenschaukel(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.85 });
-  const rope = new THREE.MeshStandardMaterial({ color: 0xc9b896, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0x8a5a34, roughness: 0.85 });
+  const rope = sharedDecorMat({ color: 0xc9b896, roughness: 0.9 });
   for (const side of [-1, 1]) {
     const legA = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.8, 6), wood);
     legA.position.set(side * 0.55, 0.9, 0.5);
@@ -2760,8 +3133,8 @@ function makeGartenschaukel(x, z) {
 }
 function makeRutsche(x, z) {
   const g = new THREE.Group();
-  const metal = new THREE.MeshStandardMaterial({ color: 0xd8443f, roughness: 0.5, metalness: 0.3 });
-  const platform = new THREE.MeshStandardMaterial({ color: 0x3a6b9c, roughness: 0.6, metalness: 0.2 });
+  const metal = sharedDecorMat({ color: 0xd8443f, roughness: 0.5, metalness: 0.3 });
+  const platform = sharedDecorMat({ color: 0x3a6b9c, roughness: 0.6, metalness: 0.2 });
   const step = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.9, 0.5), platform);
   step.position.set(-0.5, 0.45, 0);
   step.castShadow = true; step.receiveShadow = true;
@@ -2783,8 +3156,8 @@ function makeRutsche(x, z) {
 }
 function makeSandkasten(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.9 });
-  const sand = new THREE.MeshStandardMaterial({ color: 0xe0c28a, roughness: 1 });
+  const wood = sharedDecorMat({ color: 0x8a5a34, roughness: 0.9 });
+  const sand = sharedDecorMat({ color: 0xe0c28a, roughness: 1 });
   const frameGeo = new THREE.BoxGeometry(1.3, 0.16, 0.12);
   const f1 = new THREE.Mesh(frameGeo, wood); f1.position.set(0, 0.08, 0.59); f1.castShadow = true; g.add(f1);
   const f2 = new THREE.Mesh(frameGeo, wood); f2.position.set(0, 0.08, -0.59); f2.castShadow = true; g.add(f2);
@@ -2801,8 +3174,8 @@ function makeSandkasten(x, z) {
 }
 function makeVogelhaus(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x9a6a3f, roughness: 0.9 });
-  const roof = new THREE.MeshStandardMaterial({ color: 0x7a3a2c, roughness: 0.85 });
+  const wood = sharedDecorMat({ color: 0x9a6a3f, roughness: 0.9 });
+  const roof = sharedDecorMat({ color: 0x7a3a2c, roughness: 0.85 });
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.3, 6), wood);
   pole.position.y = 0.65;
   g.add(pole);
@@ -2810,7 +3183,7 @@ function makeVogelhaus(x, z) {
   house.position.y = 1.42;
   house.castShadow = true; house.receiveShadow = true;
   g.add(house);
-  const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 8), new THREE.MeshStandardMaterial({ color: 0x2a1c12 }));
+  const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 8), sharedDecorMat({ color: 0x2a1c12 }));
   hole.rotation.x = Math.PI / 2;
   hole.position.set(0, 1.44, 0.14);
   g.add(hole);
@@ -2825,7 +3198,7 @@ function makeVogelhaus(x, z) {
 }
 function makeGartenwindrad(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.85 });
+  const wood = sharedDecorMat({ color: 0x6b4226, roughness: 0.85 });
   const colors = [0xd8443f, 0x3a6b9c, 0xe0b23a, 0x4a8a5c];
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.9, 6), wood);
   pole.position.y = 0.45;
@@ -2833,7 +3206,7 @@ function makeGartenwindrad(x, z) {
   const hub = new THREE.Group();
   hub.position.y = 0.85;
   for (let i = 0; i < 4; i++) {
-    const blade = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.24, 4), new THREE.MeshStandardMaterial({ color: colors[i], roughness: 0.6, side: THREE.DoubleSide }));
+    const blade = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.24, 4), sharedDecorMat({ color: colors[i], roughness: 0.6, side: THREE.DoubleSide }));
     blade.rotation.z = Math.PI / 2;
     blade.position.set(Math.cos(i * Math.PI / 2) * 0.12, Math.sin(i * Math.PI / 2) * 0.12, 0);
     blade.rotation.y = i * Math.PI / 2;
@@ -2846,8 +3219,8 @@ function makeGartenwindrad(x, z) {
 }
 function makeWaescheleine(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x7a5233, roughness: 0.9 });
-  const line = new THREE.MeshStandardMaterial({ color: 0xe8e3d8, roughness: 0.9 });
+  const wood = sharedDecorMat({ color: 0x7a5233, roughness: 0.9 });
+  const line = sharedDecorMat({ color: 0xe8e3d8, roughness: 0.9 });
   const clothColors = [0xd8443f, 0x3a6b9c, 0xe0e0e0];
   for (const px of [-0.85, 0.85]) {
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.5, 6), wood);
@@ -2861,7 +3234,7 @@ function makeWaescheleine(x, z) {
   g.add(rope);
   const positions = [-0.5, 0, 0.5];
   positions.forEach((px, i) => {
-    const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.32), new THREE.MeshStandardMaterial({ color: clothColors[i], side: THREE.DoubleSide, roughness: 0.9 }));
+    const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.32), sharedDecorMat({ color: clothColors[i], side: THREE.DoubleSide, roughness: 0.9 }));
     cloth.position.set(px, 1.25, 0);
     g.add(cloth);
   });
@@ -2871,7 +3244,7 @@ function makeWaescheleine(x, z) {
 }
 function makePicknicktisch(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.85 });
+  const wood = sharedDecorMat({ color: 0x8a5a34, roughness: 0.85 });
   const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.75), wood);
   top.position.y = 0.75;
   top.castShadow = true; top.receiveShadow = true;
@@ -2901,7 +3274,7 @@ function makeHolzstapel(x, z) {
   for (let row = 0; row < 3; row++) {
     const countInRow = 3 - Math.floor(row / 2);
     for (let i = 0; i < countInRow; i++) {
-      const log = new THREE.Mesh(logGeo, new THREE.MeshStandardMaterial({ color: barkColors[idx % barkColors.length], roughness: 0.95 }));
+      const log = new THREE.Mesh(logGeo, sharedDecorMat({ color: barkColors[idx % barkColors.length], roughness: 0.95 }));
       log.rotation.z = Math.PI / 2;
       log.position.set(-0.25 + i * 0.19 + row * 0.02, 0.1 + row * 0.17, 0);
       log.castShadow = true; log.receiveShadow = true;
@@ -2915,8 +3288,8 @@ function makeHolzstapel(x, z) {
 }
 function makeKomposter(x, z) {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a5c3a, roughness: 0.9 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x2a1c12, roughness: 0.95 });
+  const wood = sharedDecorMat({ color: 0x4a5c3a, roughness: 0.9 });
+  const dark = sharedDecorMat({ color: 0x2a1c12, roughness: 0.95 });
   const wallGeo = new THREE.BoxGeometry(0.7, 0.55, 0.06);
   const f1 = new THREE.Mesh(wallGeo, wood); f1.position.set(0, 0.27, 0.32); f1.castShadow = true; g.add(f1);
   const f2 = new THREE.Mesh(wallGeo, wood); f2.position.set(0, 0.27, -0.32); f2.castShadow = true; g.add(f2);
@@ -2928,6 +3301,250 @@ function makeKomposter(x, z) {
   g.add(fill);
   g.position.set(x, 0, z);
   g.userData.collideRadius = 0.45;
+  return g;
+}
+
+/* ---------------- Animals (static for now — no idle motion yet) ---------------- */
+function makeChicken(x, z) {
+  const g = new THREE.Group();
+  const bodyMat = sharedDecorMat({ color: 0xf2ede0, roughness: 0.85 });
+  const combMat = sharedDecorMat({ color: 0xc23b3b, roughness: 0.6 });
+  const beakMat = sharedDecorMat({ color: 0xe8a23a, roughness: 0.5 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), bodyMat);
+  body.scale.set(1, 0.85, 1.3);
+  body.position.y = 0.16;
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), bodyMat);
+  head.position.set(0, 0.28, 0.13);
+  head.castShadow = true;
+  g.add(head);
+  const comb = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.05, 4), combMat);
+  comb.position.set(0, 0.35, 0.13);
+  g.add(comb);
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.05, 4), beakMat);
+  beak.rotation.x = Math.PI / 2;
+  beak.position.set(0, 0.27, 0.2);
+  g.add(beak);
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 4), bodyMat);
+  tail.rotation.x = Math.PI * 0.85;
+  tail.position.set(0, 0.24, -0.15);
+  g.add(tail);
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.1, 5), beakMat);
+    leg.position.set(side * 0.05, 0.05, 0);
+    g.add(leg);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.15;
+  return g;
+}
+function makeSheep(x, z) {
+  const g = new THREE.Group();
+  const woolMat = sharedDecorMat({ color: 0xf4f1e8, roughness: 1 });
+  const darkMat = sharedDecorMat({ color: 0x3a332c, roughness: 0.8 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), woolMat);
+  body.scale.set(1, 0.85, 1.3);
+  body.position.y = 0.26;
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), darkMat);
+  head.position.set(0, 0.28, 0.24);
+  head.castShadow = true;
+  g.add(head);
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.015, 0.06), darkMat);
+    ear.position.set(side * 0.08, 0.29, 0.2);
+    g.add(ear);
+  }
+  for (const [sx, sz] of [[-0.09, 0.15], [0.09, 0.15], [-0.09, -0.15], [0.09, -0.15]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.18, 6), darkMat);
+    leg.position.set(sx, 0.09, sz);
+    g.add(leg);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.25;
+  return g;
+}
+function makeCow(x, z) {
+  const g = new THREE.Group();
+  const hideMat = sharedDecorMat({ color: 0xf5f0e6, roughness: 0.9 });
+  const spotMat = sharedDecorMat({ color: 0x2c2620, roughness: 0.85 });
+  const hornMat = sharedDecorMat({ color: 0xd8c9a3, roughness: 0.6 });
+  // Rounded (stretched spheres) rather than boxes for the body/head/
+  // snout — the boxy version read too much like a voxel-game mob
+  // rather than an actual cow.
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 8), hideMat);
+  body.scale.set(1, 0.85, 1.5);
+  body.position.y = 0.3;
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const spot1 = new THREE.Mesh(new THREE.SphereGeometry(0.075, 6, 5), spotMat);
+  spot1.scale.set(1, 0.4, 1.1);
+  spot1.position.set(0.1, 0.4, 0.12);
+  g.add(spot1);
+  const spot2 = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 5), spotMat);
+  spot2.scale.set(1, 0.4, 1.1);
+  spot2.position.set(-0.08, 0.36, -0.15);
+  g.add(spot2);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), hideMat);
+  head.scale.set(1, 0.95, 1.1);
+  head.position.set(0, 0.34, 0.32);
+  head.castShadow = true;
+  g.add(head);
+  const snout = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), hideMat);
+  snout.scale.set(1, 0.7, 0.7);
+  snout.position.set(0, 0.28, 0.42);
+  g.add(snout);
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 5), hideMat);
+    ear.scale.set(1, 0.3, 0.6);
+    ear.position.set(side * 0.11, 0.36, 0.28);
+    g.add(ear);
+  }
+  for (const side of [-1, 1]) {
+    const horn = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.07, 5), hornMat);
+    horn.position.set(side * 0.07, 0.46, 0.28);
+    horn.rotation.z = side * -0.3;
+    g.add(horn);
+  }
+  for (const [sx, sz] of [[-0.09, 0.16], [0.09, 0.16], [-0.09, -0.16], [0.09, -0.16]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.03, 0.24, 6), spotMat);
+    leg.position.set(sx, 0.12, sz);
+    g.add(leg);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.3;
+  return g;
+}
+function makeRabbit(x, z) {
+  const g = new THREE.Group();
+  const furMat = sharedDecorMat({ color: 0xe8e2d5, roughness: 0.9 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 6), furMat);
+  body.scale.set(1, 0.9, 1.2);
+  body.position.y = 0.12;
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), furMat);
+  head.position.set(0, 0.2, 0.09);
+  head.castShadow = true;
+  g.add(head);
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.11, 6), furMat);
+    ear.position.set(side * 0.03, 0.33, 0.08);
+    ear.rotation.z = side * 0.15;
+    g.add(ear);
+  }
+  const tail = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 5), furMat);
+  tail.position.set(0, 0.12, -0.14);
+  g.add(tail);
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.15;
+  return g;
+}
+function makePig(x, z) {
+  const g = new THREE.Group();
+  const pinkMat = sharedDecorMat({ color: 0xe8a6a0, roughness: 0.85 });
+  const snoutMat = sharedDecorMat({ color: 0xd88b86, roughness: 0.7 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), pinkMat);
+  body.scale.set(1, 0.9, 1.3);
+  body.position.y = 0.18;
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), pinkMat);
+  head.position.set(0, 0.2, 0.16);
+  head.castShadow = true;
+  g.add(head);
+  const snout = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 8), snoutMat);
+  snout.rotation.x = Math.PI / 2;
+  snout.position.set(0, 0.18, 0.24);
+  g.add(snout);
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.05, 4), pinkMat);
+    ear.position.set(side * 0.06, 0.28, 0.15);
+    ear.rotation.x = -0.3;
+    g.add(ear);
+  }
+  for (const [sx, sz] of [[-0.07, 0.09], [0.07, 0.09], [-0.07, -0.09], [0.07, -0.09]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.1, 6), pinkMat);
+    leg.position.set(sx, 0.05, sz);
+    g.add(leg);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.2;
+  return g;
+}
+function makeCat(x, z) {
+  const g = new THREE.Group();
+  const furMat = sharedDecorMat({ color: 0x6b6b6b, roughness: 0.9 });
+  const pinkMat = sharedDecorMat({ color: 0xd98a8a, roughness: 0.6 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), furMat);
+  body.scale.set(1, 0.9, 1.5);
+  body.position.y = 0.12;
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), furMat);
+  head.position.set(0, 0.2, 0.15);
+  head.castShadow = true;
+  g.add(head);
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.05, 4), furMat);
+    ear.position.set(side * 0.05, 0.28, 0.15);
+    g.add(ear);
+  }
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.012, 6, 5), pinkMat);
+  nose.position.set(0, 0.19, 0.22);
+  g.add(nose);
+  const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.012, 0.28, 6), furMat);
+  tail.position.set(0, 0.22, -0.16);
+  tail.rotation.x = -0.9;
+  g.add(tail);
+  for (const [sx, sz] of [[-0.05, 0.08], [0.05, 0.08], [-0.05, -0.08], [0.05, -0.08]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.1, 6), furMat);
+    leg.position.set(sx, 0.05, sz);
+    g.add(leg);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.15;
+  return g;
+}
+function makeDog(x, z) {
+  const g = new THREE.Group();
+  const furMat = sharedDecorMat({ color: 0xa9784f, roughness: 0.9 });
+  const darkMat = sharedDecorMat({ color: 0x3a2c20, roughness: 0.7 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), furMat);
+  body.scale.set(1, 0.9, 1.5);
+  body.position.y = 0.18;
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), furMat);
+  head.position.set(0, 0.28, 0.22);
+  head.castShadow = true;
+  g.add(head);
+  const snout = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), furMat);
+  snout.scale.set(0.8, 0.7, 1.2);
+  snout.position.set(0, 0.24, 0.32);
+  g.add(snout);
+  const noseTip = new THREE.Mesh(new THREE.SphereGeometry(0.018, 6, 5), darkMat);
+  noseTip.position.set(0, 0.25, 0.38);
+  g.add(noseTip);
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 5), darkMat);
+    ear.scale.set(0.5, 1, 0.3);
+    ear.position.set(side * 0.09, 0.32, 0.2);
+    g.add(ear);
+  }
+  const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.015, 0.22, 6), furMat);
+  tail.position.set(0, 0.26, -0.24);
+  tail.rotation.x = -1.1;
+  g.add(tail);
+  for (const [sx, sz] of [[-0.07, 0.12], [0.07, 0.12], [-0.07, -0.12], [0.07, -0.12]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.16, 6), furMat);
+    leg.position.set(sx, 0.08, sz);
+    g.add(leg);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.2;
   return g;
 }
 
@@ -2993,6 +3610,13 @@ const DECOR_CATALOG = {
   picknicktisch: { label: 'Picnic Table', build: makePicknicktisch, randomRot: false, minSpacing: 1.0, cat: 'garden' },
   holzstapel: { label: 'Firewood Stack', build: makeHolzstapel, randomRot: true, minSpacing: 0.5, cat: 'garden' },
   komposter: { label: 'Compost Bin', build: makeKomposter, randomRot: true, minSpacing: 0.55, cat: 'garden' },
+  huhn: { label: 'Chicken', build: makeChicken, randomRot: true, minSpacing: 0.3, cat: 'animals' },
+  schaf: { label: 'Sheep', build: makeSheep, randomRot: true, minSpacing: 0.4, cat: 'animals' },
+  kuh: { label: 'Cow', build: makeCow, randomRot: true, minSpacing: 0.5, cat: 'animals' },
+  hase: { label: 'Rabbit', build: makeRabbit, randomRot: true, minSpacing: 0.3, cat: 'animals' },
+  schwein: { label: 'Pig', build: makePig, randomRot: true, minSpacing: 0.35, cat: 'animals' },
+  katze: { label: 'Cat', build: makeCat, randomRot: true, minSpacing: 0.25, cat: 'animals' },
+  hund: { label: 'Dog', build: makeDog, randomRot: true, minSpacing: 0.3, cat: 'animals' },
 };
 // The palette's own tabs — order here is the order the tabs appear in.
 const DECOR_CATEGORIES = [
@@ -3001,6 +3625,7 @@ const DECOR_CATEGORIES = [
   { key: 'garden', label: 'Garden', icon: '🌷' },
   { key: 'furniture', label: 'Furniture', icon: '🛋️' },
   { key: 'misc', label: 'Misc', icon: '📦' },
+  { key: 'animals', label: 'Animals', icon: '🐾' },
 ];
 // Deko types that come in more than one size — a lamppost, torch, or
 // palm tree at a fixed single size never quite fits every build, so
@@ -3145,6 +3770,154 @@ function clearAllDecor() {
   for (const d of placedDecor) scene.remove(d.mesh);
   clearAllDecorLights();
   placedDecor = [];
+}
+
+/* ---------------- Pet follow AI (Cat/Dog only) ----------------
+   A lightweight, bounded BFS over a coarse grid derived from the same
+   `occupancy` cells everything else already uses — not a full A* and
+   not re-run every single frame (that would be needless work for
+   something only the PLAYER'S OWN movement changes meaningfully), but
+   enough to route a following pet around a wall or building corner
+   instead of just walking straight at the player and clipping through
+   whatever's in the way. Farm animals (chicken, sheep, cow, rabbit,
+   pig) are deliberately left out — they stay put like real livestock,
+   only cats and dogs actually follow. */
+const PET_FOLLOW_TYPES = new Set(['katze', 'hund']);
+const PATH_STEP_CELLS = 5; // one module width (25cm) per pathfinding grid node — matches typical wall thickness
+const PET_FOLLOW_SPEED = 1.8; // m/s — a bit slower than the player's own 5 m/s walk
+const PET_STOP_DISTANCE = 0.6; // stands this close rather than trying to occupy the exact same spot as the player
+const PET_SEPARATION_DISTANCE = 0.35; // minimum distance kept from another following pet — otherwise several of them all converging on the same spot next to the player just stack up and visually merge into one mesh
+const PET_MAX_FOLLOW_DISTANCE = 20; // metres — beyond this, don't even attempt a search; it would only ever hit its own node cap before reaching the goal anyway
+const PET_REPATH_INTERVAL = 1.2; // seconds between path recalculations — the player rarely needs a pet's route corrected more often than this to still look responsive
+const PET_PATH_MAX_NODES = 4000; // a hard cap so a pet boxed into a fully enclosed room doesn't hang searching forever
+
+// A pathfinding "node" is blocked if the occupancy grid has ANYTHING
+// solid, at a few sampled low heights, anywhere within that node's own
+// 5x5-cell footprint — sampling only a few heights (not every cell up
+// to the animal's own height) keeps this cheap enough to call for
+// every node a BFS might visit.
+function isPetPathNodeBlocked(gridX, gridZ) {
+  const x0 = gridX * PATH_STEP_CELLS, z0 = gridZ * PATH_STEP_CELLS;
+  for (let dx = 0; dx < PATH_STEP_CELLS; dx++) {
+    for (let dz = 0; dz < PATH_STEP_CELLS; dz++) {
+      for (const y of [0, 2, 4]) {
+        if (occupancy.has(key(x0 + dx, y, z0 + dz))) return true;
+      }
+    }
+  }
+  return false;
+}
+// Bounded breadth-first search from (fromX,fromZ) to (toX,toZ), both in
+// metres, returning a list of [x,z] waypoints (metres, centred in each
+// grid node) to walk through in order — or null if no route was found
+// within the search's own node cap (fully enclosed, or simply too far).
+function findPetPathAround(fromX, fromZ, toX, toZ) {
+  const cellsPerNode = PATH_STEP_CELLS * CELL_M;
+  const startGX = Math.round(fromX / cellsPerNode), startGZ = Math.round(fromZ / cellsPerNode);
+  const goalGX = Math.round(toX / cellsPerNode), goalGZ = Math.round(toZ / cellsPerNode);
+  if (startGX === goalGX && startGZ === goalGZ) return [];
+  const PAD = 20; // extra search room beyond the straight-line box, so a route CAN detour around an obstacle rather than being boxed out by the padding itself
+  const minGX = Math.min(startGX, goalGX) - PAD, maxGX = Math.max(startGX, goalGX) + PAD;
+  const minGZ = Math.min(startGZ, goalGZ) - PAD, maxGZ = Math.max(startGZ, goalGZ) + PAD;
+  const visited = new Set([`${startGX}_${startGZ}`]);
+  const cameFrom = new Map();
+  const queue = [[startGX, startGZ]];
+  let qHead = 0; // an index pointer instead of Array.shift(), which is O(n) per call and adds up fast over thousands of nodes
+  let found = false;
+  while (qHead < queue.length && queue.length < PET_PATH_MAX_NODES) {
+    const [cx, cz] = queue[qHead++];
+    if (cx === goalGX && cz === goalGZ) { found = true; break; }
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + dx, nz = cz + dz;
+      if (nx < minGX || nx > maxGX || nz < minGZ || nz > maxGZ) continue;
+      const k = `${nx}_${nz}`;
+      if (visited.has(k) || isPetPathNodeBlocked(nx, nz)) continue;
+      visited.add(k);
+      cameFrom.set(k, [cx, cz]);
+      queue.push([nx, nz]);
+    }
+  }
+  if (!found) return null;
+  const path = [];
+  let cur = [goalGX, goalGZ];
+  while (cur[0] !== startGX || cur[1] !== startGZ) {
+    path.unshift(cur);
+    const prev = cameFrom.get(`${cur[0]}_${cur[1]}`);
+    if (!prev) return null; // shouldn't happen, but never trust a reconstructed path blindly
+    cur = prev;
+  }
+  return path.map(([gx, gz]) => [(gx + 0.5) * cellsPerNode, (gz + 0.5) * cellsPerNode]);
+}
+// Called once per frame — advances every placed cat/dog a little closer
+// along its own current path toward the player, recalculating that path
+// every PET_REPATH_INTERVAL seconds (or immediately if it doesn't have
+// one yet) rather than on every single frame.
+function updatePetFollowers(dt) {
+  for (const d of placedDecor) {
+    if (!PET_FOLLOW_TYPES.has(d.type)) continue;
+    if (!d._follow) d._follow = { path: null, pathIndex: 0, repathTimer: 0 };
+    const f = d._follow;
+    const distToPlayer = Math.hypot(playerPos.x - d.mesh.position.x, playerPos.z - d.mesh.position.z);
+    if (distToPlayer <= PET_STOP_DISTANCE) { f.path = null; continue; }
+    // Too far away to bother even trying — a search this far out would
+    // hit its own node cap long before ever reaching the goal anyway
+    // (returning null every time), and skipping the attempt entirely
+    // avoids paying for a full failed BFS for no result at all.
+    if (distToPlayer > PET_MAX_FOLLOW_DISTANCE) { f.path = null; continue; }
+    f.repathTimer -= dt;
+    // Deliberately does NOT also retry just because f.path is null — a
+    // failed search (no route found within the node cap) used to force
+    // an immediate retry on the very next frame regardless of this
+    // timer, since "no path" and "never tried yet" looked the same to
+    // this check. That meant a full, expensive BFS running every single
+    // frame for as long as no route existed (out of range, or genuinely
+    // walled off) — a real, measurable stutter, and the pet never
+    // actually got anywhere in the meantime either. Now a failed
+    // attempt waits out the same cooldown as a successful one before
+    // trying again.
+    if (f.repathTimer <= 0 || (f.path && f.pathIndex >= f.path.length)) {
+      f.path = findPetPathAround(d.mesh.position.x, d.mesh.position.z, playerPos.x, playerPos.z);
+      f.pathIndex = 0;
+      f.repathTimer = PET_REPATH_INTERVAL;
+    }
+    if (!f.path || f.path.length === 0) continue; // no route found (or already effectively there) — stand still rather than clip through whatever's blocking it
+    const [tx, tz] = f.path[f.pathIndex];
+    const tdx = tx - d.mesh.position.x, tdz = tz - d.mesh.position.z;
+    const tdist = Math.hypot(tdx, tdz);
+    if (tdist < 0.15) { f.pathIndex++; continue; }
+    const step = Math.min(PET_FOLLOW_SPEED * dt, tdist);
+    d.mesh.position.x += (tdx / tdist) * step;
+    d.mesh.position.z += (tdz / tdist) * step;
+    d.x = d.mesh.position.x; d.z = d.mesh.position.z; // keep the entry's own recorded position in sync (used elsewhere, e.g. serialising a save)
+    d.mesh.rotation.y = Math.atan2(tdx, tdz);
+    d.rotY = d.mesh.rotation.y;
+  }
+  // Separation pass: run AFTER every follower has already moved for this
+  // frame, rather than folded into the loop above — nudging two pets
+  // apart while a THIRD one's own move is still pending would just be
+  // immediately overwritten by whatever that third one does next, so
+  // this deliberately waits until positions have all settled for the
+  // frame first. Two pets ending up (or literally starting out) at the
+  // exact same spot are pushed apart along a fixed arbitrary direction,
+  // since there's no meaningful "away from each other" direction when
+  // the distance between them is exactly zero.
+  const followers = placedDecor.filter((d) => PET_FOLLOW_TYPES.has(d.type));
+  for (let i = 0; i < followers.length; i++) {
+    for (let j = i + 1; j < followers.length; j++) {
+      const a = followers[i], b = followers[j];
+      const dx = b.mesh.position.x - a.mesh.position.x;
+      const dz = b.mesh.position.z - a.mesh.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist >= PET_SEPARATION_DISTANCE) continue;
+      const nx = dist > 1e-6 ? dx / dist : 1;
+      const nz = dist > 1e-6 ? dz / dist : 0;
+      const overlap = (PET_SEPARATION_DISTANCE - dist) / 2;
+      a.mesh.position.x -= nx * overlap; a.mesh.position.z -= nz * overlap;
+      b.mesh.position.x += nx * overlap; b.mesh.position.z += nz * overlap;
+      a.x = a.mesh.position.x; a.z = a.mesh.position.z;
+      b.x = b.mesh.position.x; b.z = b.mesh.position.z;
+    }
+  }
 }
 
 /* a small stacked-Briq material pile near the practice wall, purely decorative */
@@ -3602,6 +4375,7 @@ function placeBrick(anchor, lengthCells, orientation, mainType, studded, force, 
   const id = nextBrickId++;
   bricks.set(id, { mesh, cells, footprint: fp, mainType, lengthCells, studded, color });
   cells.forEach(cell => occupancy.set(key(...cell), id));
+  trackBuiltHeight(cells);
   mesh.userData.brickId = id;
   brickMeshes.push(mesh);
   totalPlaced++;
@@ -3836,6 +4610,7 @@ const DECOR_ICONS = {
   grill: '🍖', gartenschaukel: '🎪', rutsche: '🛝', sandkasten: '🟨',
   vogelhaus: '🐦', gartenwindrad: '🎐', waescheleine: '🧺', picknicktisch: '🍉',
   holzstapel: '🪵', komposter: '♻️',
+  huhn: '🐔', schaf: '🐑', kuh: '🐄', hase: '🐇', schwein: '🐖', katze: '🐱', hund: '🐶',
 };
 const DECOR_PAGE_SIZE = 4;
 let decorPage = 0;
@@ -4013,6 +4788,7 @@ document.getElementById('roofMaterialButtons').addEventListener('click', (e) => 
 function updateActionBtnLabel() {
   const ab = document.getElementById('actionBtn');
   ab.classList.remove('remove', 'paint');
+  if (exploreMode) { ab.textContent = 'JUMP'; return; }
   if (tool === 'remove') { ab.textContent = (removeBoxMode ? (removeBoxStart ? 'CLEAR' : 'MARK') : 'REMOVE'); ab.classList.add('remove'); return; }
   if (tool === 'paint') { ab.textContent = 'PAINT'; ab.classList.add('paint'); return; }
   if (tool === 'copy') { ab.textContent = clipboard ? 'PASTE' : (copyStart ? 'CORNER' : 'MARK'); return; }
@@ -4209,6 +4985,119 @@ const FLY_MAX_Y = HEIGHT_MAX + 4;
 let flyUp = false, flyDown = false;
 const playerPos = new THREE.Vector3(1.6, eyeHeight, 2.0);
 let yaw = Math.PI * 0.8, pitch = -0.15;
+
+/* ---------------- Explore mode (gravity, jump, real collision) ----------------
+   A second, orthogonal way of moving through the world alongside the
+   normal no-clip "fly anywhere to build" mode — real collision against
+   whatever's actually been built, gravity pulling the player back down,
+   and a jump. The highest placed Briq at any given spot IS the ceiling
+   on how high the player can stand there — there's no flying past it
+   the way build mode allows, only climbing what's actually there.
+   (State itself — exploreMode, playerVelY, and the rest — lives up near
+   CELL_M instead of down here; see the comment over there for why.) */
+
+// Whether the single cell at this exact world position (metres) is
+// occupied by any placed Briq — reuses the very same `occupancy` map
+// the build/remove/paint tools already maintain, just addressed by
+// real-world coordinates instead of raw cell indices.
+function isSolidCellAtMeters(wx, wy, wz) {
+  const cx = Math.round(wx / CELL_M);
+  const cy = Math.round(wy / CELL_M);
+  const cz = Math.round(wz / CELL_M);
+  return occupancy.has(key(cx, cy, cz));
+}
+// The height (metres) of the topmost occupied cell's own top surface at
+// a given (x,z) — a straightforward top-down scan through the world's
+// full vertical range. `occupancy` lookups are cheap (a plain Map), and
+// builds tall enough to make this scan itself the bottleneck are far
+// beyond anything this game's own height limit allows in the first
+// place, so there's no need for a separate incrementally-maintained
+// heightmap purely to speed this up.
+function exploreGroundHeightAt(wx, wz) {
+  const cx = Math.round(wx / CELL_M);
+  const cz = Math.round(wz / CELL_M);
+  // Starts from the actual tallest cell ever built (plus a little
+  // headroom) instead of the theoretical world ceiling — a typical
+  // build is nowhere near HEIGHT_MAX tall, so scanning down from there
+  // every single call wasted the overwhelming majority of its own
+  // iterations checking empty air above anything that actually exists.
+  const topCell = Math.min(Math.round((HEIGHT_MAX + 4) / CELL_M), highestBuiltCellY + 6);
+  for (let cy = topCell; cy >= 0; cy--) {
+    if (occupancy.has(key(cx, cy, cz))) return (cy + 1) * CELL_M;
+  }
+  return 0;
+}
+// The ground height that actually matters for movement/grounding
+// decisions — the tallest surface found across the SAME cross of
+// radius offsets isExploreBlockedAt itself samples, not just the bare
+// centre point. Standing exactly at (or near) a boundary between two
+// differently-tall neighbouring cells — a stair edge is the obvious
+// case — is exactly where the bare centre-point version would keep
+// flipping between the two heights from one frame to the next as the
+// player's position wobbled by a hair, endlessly re-triggering the
+// grounded check one way and the step-up check the other: a rapid
+// little up/down bounce that never settles. Always resolving ground
+// height through this same radius-aware version, everywhere it's used
+// for movement, keeps every decision agreeing with the others about
+// which surface the player is actually standing on.
+function exploreGroundHeightNear(wx, wz) {
+  const offsets = [[0, 0], [PLAYER_RADIUS_M, 0], [-PLAYER_RADIUS_M, 0], [0, PLAYER_RADIUS_M], [0, -PLAYER_RADIUS_M]];
+  let g = 0;
+  for (const [ox, oz] of offsets) g = Math.max(g, exploreGroundHeightAt(wx + ox, wz + oz));
+  return g;
+}
+// Horizontal wall collision: samples a small cross of points around the
+// player's own radius, at three body heights (ankle/chest/head) — an
+// approximation rather than a full sweep, but good enough to stop the
+// player walking straight through a wall while still letting them pass
+// cleanly through an open doorway (which has no occupied cells at any
+// of the sampled heights).
+function isExploreBlockedAt(wx, wz, footY) {
+  const heights = [footY + 0.15, footY + PLAYER_HEIGHT_M * 0.55, footY + PLAYER_HEIGHT_M - 0.05];
+  const offsets = [[0, 0], [PLAYER_RADIUS_M, 0], [-PLAYER_RADIUS_M, 0], [0, PLAYER_RADIUS_M], [0, -PLAYER_RADIUS_M]];
+  for (const h of heights) {
+    for (const [dx, dz] of offsets) {
+      if (isSolidCellAtMeters(wx + dx, h, wz + dz)) return true;
+    }
+  }
+  return false;
+}
+// Tries moving to (nx,nz) at the player's current foot height; if that's
+// blocked but the obstruction is short enough to just walk up onto in
+// one motion (a single stair step, essentially), tries again standing
+// on TOP of whatever's actually there instead of stopping dead. Returns
+// the resulting foot height on success (which may be higher than the
+// one passed in), or null if the move is blocked outright.
+function resolveExploreAxisMove(nx, nz, footY) {
+  if (!isExploreBlockedAt(nx, nz, footY)) return footY;
+  const destGround = exploreGroundHeightNear(nx, nz);
+  const rise = destGround - footY;
+  if (rise > 0 && rise <= STEP_HEIGHT_M && !isExploreBlockedAt(nx, nz, destGround)) return destGround;
+  return null;
+}
+function setExploreMode(v) {
+  exploreMode = v;
+  document.body.classList.toggle('exploring', exploreMode);
+  const btn = document.getElementById('exploreModeBtn');
+  btn.textContent = exploreMode ? '⏹' : '▶';
+  btn.title = exploreMode ? 'Stop exploring' : 'Explore mode';
+  btn.classList.toggle('active', exploreMode);
+  updateActionBtnLabel(); // the round button becomes JUMP while exploring, and back to whatever the current build tool says otherwise
+  if (exploreMode) {
+    playerVelY = 0;
+    exploreGrounded = false;
+    jumpRequested = false;
+    // If the player was flying somewhere below ground level (shouldn't
+    // normally happen, but build mode has no floor collision at all),
+    // snap them up onto solid ground immediately rather than leaving
+    // them stuck inside a Briq the moment gravity takes over.
+    const ground = exploreGroundHeightNear(playerPos.x, playerPos.z);
+    if (playerPos.y - eyeHeight < ground) playerPos.y = ground + eyeHeight;
+  } else {
+    flyUp = false; flyDown = false;
+  }
+}
+document.getElementById('exploreModeBtn').addEventListener('click', () => setExploreMode(!exploreMode));
 
 function focusOn([fx, fz]) {
   if (mode === 'orbit') {
@@ -4422,6 +5311,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' || e.code === 'Tab') { e.preventDefault(); performRotateAction(); }
   if (e.code === 'KeyQ') { mainType = mainType === 'WS20' ? 'WS25' : 'WS20'; if (!BRIQ_CATALOG[mainType].sizes[sizeKey]) sizeKey = Object.keys(BRIQ_CATALOG[mainType].sizes)[0]; applyType(); }
   if (e.code === 'KeyZ') { studded = !studded; applyType(); }
+  if (e.code === 'Space' && exploreMode) { e.preventDefault(); jumpRequested = true; }
 });
 window.addEventListener('keyup', (e) => keys[e.code] = false);
 
@@ -4513,11 +5403,12 @@ function beginAction() {
 }
 actionBtnEl.addEventListener('pointerdown', (e) => {
   actionBtnEl.setPointerCapture(e.pointerId);
-  beginAction();
+  if (exploreMode) { jumpRequested = true; }
+  else { beginAction(); }
   e.preventDefault();
 });
-actionBtnEl.addEventListener('pointerup', endAction);
-actionBtnEl.addEventListener('pointercancel', endAction);
+actionBtnEl.addEventListener('pointerup', (e) => { if (!exploreMode) endAction(); });
+actionBtnEl.addEventListener('pointercancel', (e) => { if (!exploreMode) endAction(); });
 
 // Left mouse button does the SAME thing the round action button does
 // (build/remove, hold to repeat) — the ordinary "left-click builds" a PC
@@ -5457,6 +6348,7 @@ function placeSlabBlock(x0, x1, y, z0, z1, mt, colorVal, force) {
     studded: false, color: colorVal, isSlabBlock: true,
   });
   cells.forEach((c) => occupancy.set(key(...c), id));
+  trackBuiltHeight(cells);
   body.userData.brickId = id;
   brickMeshes.push(body);
   updateHud();
@@ -5469,7 +6361,7 @@ const roofMatCache = {};
 function getRoofBodyMat(material) {
   const def = ROOF_MATERIALS[material] || ROOF_MATERIALS.holz;
   if (!roofMatCache[material]) {
-    roofMatCache[material] = new THREE.MeshStandardMaterial({ color: def.color, roughness: def.roughness, metalness: def.metalness });
+    roofMatCache[material] = sharedDecorMat({ color: def.color, roughness: def.roughness, metalness: def.metalness });
   }
   return roofMatCache[material];
 }
@@ -5574,6 +6466,7 @@ function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force)
     roofYLow: yLow, roofYHigh: yHigh, roofSlopeAxis: slopeAxis, roofMaterial: material,
   });
   cells.forEach((c) => occupancy.set(key(...c), id));
+  trackBuiltHeight(cells);
   body.userData.brickId = id;
   brickMeshes.push(body);
   updateHud();
@@ -6082,6 +6975,7 @@ function confirmLevelStart() {
   reallyStartLevel(levelDef);
 }
 function reallyStartLevel(levelDef) {
+  if (exploreMode) setExploreMode(false); // a Level needs the build UI to actually complete it
   exitLevel(); // clears any leftover ghost outlines from a previous level session
   resetGame(); // wipes every Briq/Deko in the world and the undo history
   activeLevel = { def: levelDef, filled: new Set(), ghosts: new Map() };
@@ -6471,6 +7365,61 @@ function setCameraFov(v) {
   camera.fov = v;
   camera.updateProjectionMatrix();
 }
+// Rebuilds the ground plane and grid overlay to match a new radius —
+// their own size is baked into the geometry itself (unlike a plain
+// scale transform, which would also stretch the ground's own texture
+// repeat and the grid's own cell spacing), so this disposes the old
+// geometry and swaps in a freshly-sized one rather than trying to
+// resize in place.
+function rebuildGroundAndGrid(radius) {
+  const size = groundSizeFor(radius);
+  const oldGroundGeo = ground.geometry;
+  ground.geometry = new THREE.PlaneGeometry(size, size);
+  oldGroundGeo.dispose();
+  const wasVisible = grid.visible;
+  scene.remove(grid);
+  grid.geometry.dispose(); grid.material.dispose();
+  // Divisions capped rather than scaling 1-for-1 with the ground's own
+  // size — at the largest allowed radius that would mean well over 600
+  // individual grid lines, which is both wasted geometry and, at that
+  // scale, a spacing far too fine to actually read as a usable
+  // reference anyway. Below the cap (true for every "normal"-sized
+  // world) this is identical to the original 1-line-per-metre look.
+  const divisions = Math.min(Math.round(size), 80);
+  grid = new THREE.GridHelper(size, divisions, 0x3f5b45, 0x557a5f);
+  grid.position.y = 0.012;
+  grid.material.opacity = 0.18;
+  grid.material.transparent = true;
+  grid.visible = wasVisible;
+  scene.add(grid);
+}
+// Live-adjustable play-area radius (Settings \u2192 a slider, not just a
+// fixed handful of presets) \u2014 WORLD_MIN/WORLD_MAX are plain mutable
+// variables specifically so every place that already reads them (the
+// movement clamp, build placement validity via CELL_BOUND) picks up a
+// change immediately with zero further wiring, the same way changing
+// look sensitivity or FOV already works. Deliberately clamped to
+// WORLD_RADIUS_MIN so a Level's own fixed-position layout (the
+// furthest one extends to about 11.5m from the origin) can never end
+// up outside the buildable area no matter how small the world is set.
+function setWorldRadius(r) {
+  r = Math.max(WORLD_RADIUS_MIN, Math.min(WORLD_RADIUS_MAX, r));
+  WORLD_MIN = -r; WORLD_MAX = r;
+  CELL_BOUND = Math.round(WORLD_MAX / CELL_M);
+  rebuildGroundAndGrid(r);
+  sun.shadow.camera.left = -r - 8; sun.shadow.camera.right = r + 8;
+  sun.shadow.camera.top = r + 8; sun.shadow.camera.bottom = -r - 8;
+  sun.shadow.camera.updateProjectionMatrix();
+  // Shrinking the world out from under wherever the player currently
+  // stands (mid-build, per how this is meant to apply) must not strand
+  // them outside the new boundary until their next voluntary move —
+  // snap them back in right away, the exact same clamp the movement
+  // code itself already applies every frame.
+  playerPos.x = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.x));
+  playerPos.z = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.z));
+  document.getElementById('worldRadiusLabel').textContent = `${(r * 2).toFixed(0)}m`;
+  try { localStorage.setItem(WORLD_RADIUS_KEY, String(r)); } catch (e) { /* best-effort */ }
+}
 // Bird's-eye/orbit already zooms with the mouse wheel automatically —
 // that's OrbitControls' own default behaviour (moving the camera closer/
 // further from its target, bounded by minDistance/maxDistance above).
@@ -6531,6 +7480,23 @@ document.getElementById('sensitivitySlider').addEventListener('input', (e) => {
 document.getElementById('fovSlider').addEventListener('input', (e) => {
   setCameraFov(Number(e.target.value));
 });
+document.getElementById('worldRadiusSlider').addEventListener('input', (e) => {
+  setWorldRadius(Number(e.target.value));
+});
+// Restore whatever radius was last chosen (falling back to the
+// original default of 18 — a 36m-wide play area — if nothing was ever
+// saved), and reflect it in the slider itself so it doesn't just show
+// its own hardcoded default value while the game quietly runs at a
+// different actual size underneath it.
+{
+  let savedRadius = 18;
+  try {
+    const s = localStorage.getItem(WORLD_RADIUS_KEY);
+    if (s !== null) { const v = parseFloat(s); if (!isNaN(v)) savedRadius = v; }
+  } catch (e) { /* best-effort */ }
+  setWorldRadius(savedRadius);
+  document.getElementById('worldRadiusSlider').value = String(WORLD_MAX);
+}
 
 /* ---------------- QR code (links back to the game itself) ---------------- */
 // Generated fully client-side via the qrcode-generator library (loaded
@@ -7526,6 +8492,7 @@ function animate() {
   elapsedTime += dt;
   if (backdropUpdaters.length) { for (const fn of backdropUpdaters) fn(elapsedTime); }
   if (activeDecorLights.length) updateDecorLightFlicker(elapsedTime);
+  if (exploreMode) updatePetFollowers(dt); // following is a Play-mode-only behaviour — a pet standing still while you're mid-build (walking through walls with no-clip, teleporting the aim around) would look broken rather than charming
   // Re-derives which buttons should be enabled and where the pointing
   // hand should be every single frame — Remove and Recolour each have
   // phases (switch tool, aim, press) that depend on the player's LIVE
@@ -7549,24 +8516,92 @@ function animate() {
     const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     const right = new THREE.Vector3(-forward.z, 0, forward.x);
     const speed = 5.0;
-    playerPos.addScaledVector(forward, iz * speed * dt);
-    playerPos.addScaledVector(right, ix * speed * dt);
-    playerPos.x = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.x));
-    playerPos.z = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.z));
 
-    // Vertical flight — lets the player rise to build upper courses and
-    // roofs instead of being stuck at fixed eye height (Space/▲ up,
-    // Shift/▼ down).
-    let flyDir = 0;
-    if (touchUI) {
-      if (flyUp) flyDir += 1;
-      if (flyDown) flyDir -= 1;
+    if (exploreMode) {
+      // Horizontal movement is resolved per-axis against real collision
+      // (try the X move, then the Z move, independently) — the standard
+      // trick that lets a player slide smoothly along a wall they're
+      // walking into at an angle, rather than stopping dead the instant
+      // either axis touches something solid. Each axis also gets a
+      // step-up attempt if it's blocked outright — see
+      // resolveExploreAxisMove — so a single stair step (or a lone
+      // course-tall Briq laid across a path) acts like a step to climb
+      // over rather than a wall.
+      let footY = playerPos.y - eyeHeight;
+      const dx = (forward.x * iz + right.x * ix) * speed * dt;
+      const dz = (forward.z * iz + right.z * ix) * speed * dt;
+      const tryX = playerPos.x + dx;
+      const tryZ = playerPos.z + dz;
+      let stepped = false;
+      const resX = resolveExploreAxisMove(tryX, playerPos.z, footY);
+      if (resX !== null) { playerPos.x = tryX; if (resX !== footY) { footY = resX; stepped = true; } }
+      const resZ = resolveExploreAxisMove(playerPos.x, tryZ, footY);
+      if (resZ !== null) { playerPos.z = tryZ; if (resZ !== footY) { footY = resZ; stepped = true; } }
+      playerPos.x = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.x));
+      playerPos.z = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.z));
+      if (stepped) {
+        // Stepping up onto something isn't a jump or a fall — settle
+        // there directly, with no residual vertical velocity left over
+        // to fight with the grounded-check that runs right below.
+        playerPos.y = footY + eyeHeight;
+        playerVelY = 0;
+      }
+
+      // Gravity + jump. "Grounded" is re-derived fresh from the actual
+      // world underneath every single frame — there's no persistent
+      // "which Briq am I standing on" state to keep in sync as the
+      // player moves around, or as the build itself changes under
+      // their feet (removing your own floor mid-walk really does drop
+      // you). Uses the SAME radius-aware ground query the horizontal
+      // step-up check uses (not just the bare centre point) — standing
+      // right at a stair's edge, where the centre point alone could
+      // flip between two different neighbouring heights from one frame
+      // to the next, is exactly what caused an endless tiny up/down
+      // bounce there before this used the same query everywhere.
+      const ground = exploreGroundHeightNear(playerPos.x, playerPos.z);
+      const newFootY = playerPos.y - eyeHeight;
+      if (newFootY <= ground + 0.02 && playerVelY <= 0) {
+        exploreGrounded = true;
+        playerVelY = 0;
+        playerPos.y = ground + eyeHeight;
+        if (jumpRequested) { playerVelY = EXPLORE_JUMP_SPEED; exploreGrounded = false; }
+      } else {
+        exploreGrounded = false;
+        playerVelY += EXPLORE_GRAVITY * dt;
+        const nextY = playerPos.y + playerVelY * dt;
+        // Ceiling collision: rising into the underside of something
+        // solid stops the ascent right there (gravity takes back over
+        // from that point on) instead of clipping up into it.
+        if (playerVelY > 0 && isSolidCellAtMeters(playerPos.x, nextY - eyeHeight + PLAYER_HEIGHT_M, playerPos.z)) {
+          playerVelY = 0;
+        } else {
+          playerPos.y = nextY;
+        }
+        // Safety clamp: never end up below the ground just computed for
+        // this very frame, however the numbers above worked out.
+        if (playerPos.y - eyeHeight < ground) { playerPos.y = ground + eyeHeight; playerVelY = 0; }
+      }
+      jumpRequested = false;
     } else {
-      if (keys['Space']) flyDir += 1;
-      if (keys['ShiftLeft'] || keys['ShiftRight'] || keys['ControlLeft']) flyDir -= 1;
+      playerPos.addScaledVector(forward, iz * speed * dt);
+      playerPos.addScaledVector(right, ix * speed * dt);
+      playerPos.x = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.x));
+      playerPos.z = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.z));
+
+      // Vertical flight — lets the player rise to build upper courses and
+      // roofs instead of being stuck at fixed eye height (Space/▲ up,
+      // Shift/▼ down).
+      let flyDir = 0;
+      if (touchUI) {
+        if (flyUp) flyDir += 1;
+        if (flyDown) flyDir -= 1;
+      } else {
+        if (keys['Space']) flyDir += 1;
+        if (keys['ShiftLeft'] || keys['ShiftRight'] || keys['ControlLeft']) flyDir -= 1;
+      }
+      playerPos.y += flyDir * FLY_SPEED * dt;
+      playerPos.y = Math.max(FLY_MIN_Y, Math.min(FLY_MAX_Y, playerPos.y));
     }
-    playerPos.y += flyDir * FLY_SPEED * dt;
-    playerPos.y = Math.max(FLY_MIN_Y, Math.min(FLY_MAX_Y, playerPos.y));
 
     camera.position.copy(playerPos);
     camera.rotation.order = 'YXZ';
@@ -7575,7 +8610,23 @@ function animate() {
     orbitControls.update();
   }
 
-  if (tool === 'copy') {
+  if (exploreMode) {
+    // None of this is relevant while exploring — every ghost preview
+    // and highlight gets hidden/removed outright, the same way the Copy
+    // tool's own branch below already clears everything else while
+    // it's active.
+    ghostMesh.visible = false;
+    if (decorGhostMesh) { scene.remove(decorGhostMesh); decorGhostMesh = null; }
+    if (slabGhostMesh && slabGhostMesh.parent) scene.remove(slabGhostMesh);
+    if (roofGhostMesh && roofGhostMesh.parent) scene.remove(roofGhostMesh);
+    if (removeAreaGhostMesh && removeAreaGhostMesh.parent) scene.remove(removeAreaGhostMesh);
+    clearRemoveBoxHighlights();
+    if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
+    clearCopyAreaHighlights();
+    if (clipboardPreviewGroup && clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
+    if (removeBoxGhostMesh && removeBoxGhostMesh.parent) scene.remove(removeBoxGhostMesh);
+    clearRemoveBoxHighlights();
+  } else if (tool === 'copy') {
     ghostMesh.visible = false;
     if (decorGhostMesh) { scene.remove(decorGhostMesh); decorGhostMesh = null; }
     if (slabGhostMesh && slabGhostMesh.parent) scene.remove(slabGhostMesh);
@@ -7871,6 +8922,7 @@ function clearAllBricks() {
   occupancy.clear();
   brickMeshes.length = 0;
   totalPlaced = 0;
+  highestBuiltCellY = 0;
 }
 // Starting over: clears every Briq and every player-placed Deko object,
 // and forgets the undo history (there's nothing sensible left to undo

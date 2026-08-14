@@ -740,7 +740,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v1.53</div>
+  <div id="versionLabel">v1.54</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -4266,6 +4266,15 @@ window.addEventListener('keyup', (e) => keys[e.code] = false);
 // o'clock) does rapid repeat-removal arm itself, the same way holding
 // already works for Build.
 let actionHeld = false;
+// While a Recolour stroke is in progress (from beginAction to endAction),
+// every distinct Briq touched gets its ORIGINAL colour captured here —
+// once, the first time it's touched, never overwritten by a later touch
+// within the SAME stroke — so the whole dragged stroke undoes as one
+// single step back to how everything looked before the stroke started,
+// instead of one undo entry per individual Briq painted along the way.
+// null outside of an active paint stroke (including for a plain single
+// tap, which is just a one-Briq stroke and batches the exact same way).
+let paintStrokeChanges = null;
 let removeArmTimer = null;
 let removeArmRAF = null;
 const REMOVE_ARM_MS = 1000;
@@ -4279,6 +4288,26 @@ function stopRemoveArming() {
 }
 function endAction() {
   commitDragRow(); // no-op unless a build-mode axis-locked row drag is actually in progress
+  // Whatever this Recolour stroke touched gets bundled into ONE undo
+  // step here, reverting every distinct Briq back to what it looked
+  // like before the stroke began — not one undo entry per Briq painted
+  // along the way, which is what a plain per-frame doPaintAction() call
+  // would otherwise keep pushing for as long as the button stayed held.
+  if (paintStrokeChanges && paintStrokeChanges.size > 0) {
+    const changes = paintStrokeChanges;
+    pushUndo(() => {
+      changes.forEach(({ b, oldColor }, id) => {
+        if (bricks.get(id) !== b) return; // this Briq was removed again since the stroke — nothing left to revert
+        const depthCells = b.footprint.z1 - b.footprint.z0 + 1;
+        const revertMat = b.isSlabBlock
+          ? getSlabBodyMat(b.mainType, b.lengthCells, depthCells, oldColor)
+          : getWoodMatTinted(b.mainType, b.lengthCells, oldColor);
+        b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
+        b.color = oldColor;
+      });
+    });
+  }
+  paintStrokeChanges = null;
   actionHeld = false;
   holdSession = null;
   stopRemoveArming();
@@ -4288,6 +4317,7 @@ function endAction() {
 // logic either way, just two different input sources triggering it.
 function beginAction() {
   startHoldSession();
+  if (tool === 'paint') paintStrokeChanges = new Map();
   if (tool === 'remove' && !removeBoxMode) {
     doAction(); // exactly one removal PASS (one Briq, or one whole grid-area batch), always, on the press itself
     actionBtnEl.classList.add('arming');
@@ -4812,11 +4842,23 @@ function doPaintAction() {
   triggerCrosshairSwing('paint');
   unlockAchievement('first_recolour');
   notifyTutorial('recolour');
-  pushUndo(() => {
-    const revertMat = getMat(oldColor);
-    b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
-    b.color = oldColor;
-  });
+  if (paintStrokeChanges) {
+    // First touch this stroke: remember what it looked like BEFORE any
+    // of this stroke's changes, so undoing later restores that original
+    // regardless of how many more times this same Briq gets repainted
+    // (e.g. dragging back and forth) before the stroke ends.
+    if (!paintStrokeChanges.has(id)) paintStrokeChanges.set(id, { b, oldColor });
+  } else {
+    // No active stroke to batch into (shouldn't normally happen, since
+    // beginAction always opens one before the first paint of a press) —
+    // falls back to its own individual undo step rather than silently
+    // losing undo support altogether.
+    pushUndo(() => {
+      const revertMat = getMat(oldColor);
+      b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
+      b.color = oldColor;
+    });
+  }
 }
 
 function doDecorAction() {

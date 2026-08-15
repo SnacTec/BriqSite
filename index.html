@@ -954,7 +954,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v2.26</div>
+  <div id="versionLabel">v2.28</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -2366,6 +2366,316 @@ function makePathTile(x, z) {
   tile.userData.collideRadius = 0.01; // flush tiles shouldn't clear neighbouring decor
   return tile;
 }
+// Ground-COVER tiles: Grass Patch / Gravel Patch / Dirt Patch. Deliberately
+// bigger than the path tile above (and bigger than virtually every other
+// Deko item) — the whole point of these is covering a decent stretch of
+// ground in a single placement rather than fussy small-scale detail work,
+// so a much larger footprint is the actual feature here, not an
+// oversight. GROUND_TILE_SIZE (0.5m) is exactly double the shared
+// DECOR_GRID (0.25m) the placement cursor snaps to, so tiles placed on
+// consecutive grid points sit perfectly flush edge-to-edge with no gaps
+// or overlap, tiling cleanly across as large an area as needed.
+const GROUND_TILE_SIZE = 0.5;
+function makeGroundCoverTile(x, z, tex) {
+  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 1 });
+  const tile = new THREE.Mesh(new THREE.BoxGeometry(GROUND_TILE_SIZE, 0.04, GROUND_TILE_SIZE), mat);
+  tile.position.set(x, 0.02, z);
+  tile.receiveShadow = true;
+  tile.userData.collideRadius = 0.01; // flush tiles shouldn't clear neighbouring decor, same reasoning as the path tile above
+  return tile;
+}
+function makeWieseTile(x, z) {
+  // Reuses the EXACT same colour recipe as the "grass" environment's own
+  // ground texture (see the environment table above) — a grass patch
+  // dropped onto a non-grass environment (e.g. a courtyard cut into the
+  // beach environment's own sand) then looks like a genuine, deliberate
+  // patch of lawn rather than a mismatched shade of green.
+  const tex = makeSpeckledTexture('#3f6b3a', { count: 500, size: 3, alpha: 0.4, rgb: () => [40 + Math.random() * 40, 90 + Math.random() * 45, 35 + Math.random() * 30] }, { count: 4, minR: 8, maxR: 20, rgba: 'rgba(30,60,25,0.3)' });
+  tex.repeat.set(3, 3); // a much smaller repeat than the full-ground version's own (18,18) — this tile is only half a metre across, not the whole world floor
+  return makeGroundCoverTile(x, z, tex);
+}
+function makeKiesTile(x, z) {
+  const tex = makeGravelTexture(); // the same gravel look the Path item already uses — visually consistent, just at a much larger, area-filling size here instead of a single small stepping tile
+  tex.repeat.set(2, 2);
+  return makeGroundCoverTile(x, z, tex);
+}
+function makeAckerTile(x, z) {
+  // A darker, more reddish-brown palette than gravel's own greyish tan,
+  // with a few larger, darker patches worked in to suggest turned-over
+  // furrows of tilled soil rather than a flat, uniform brown.
+  const tex = makeSpeckledTexture('#5a4632', { count: 550, size: 3, alpha: 0.4, rgb: () => [70 + Math.random() * 40, 52 + Math.random() * 28, 34 + Math.random() * 20] }, { count: 6, minR: 10, maxR: 28, rgba: 'rgba(35,26,16,0.35)' });
+  tex.repeat.set(2, 2);
+  return makeGroundCoverTile(x, z, tex);
+}
+function makeBlumenwieseTile(x, z) {
+  // Same base recipe as the plain Grass Patch, but roughly one speckle
+  // in eight rolls one of a handful of bright flower colours instead of
+  // a green grass tone — small coloured dots scattered through the
+  // green, rather than a uniform lawn.
+  const flowerColors = [[224, 82, 107], [240, 195, 60], [232, 232, 232], [183, 104, 209]];
+  const tex = makeSpeckledTexture('#4b7a3f', {
+    count: 550, size: 3, alpha: 0.55,
+    rgb: () => (Math.random() < 0.12 ? flowerColors[Math.floor(Math.random() * flowerColors.length)] : [45 + Math.random() * 40, 95 + Math.random() * 45, 40 + Math.random() * 30]),
+  }, { count: 4, minR: 8, maxR: 18, rgba: 'rgba(30,60,25,0.25)' });
+  tex.repeat.set(3, 3);
+  return makeGroundCoverTile(x, z, tex);
+}
+function makeMoosTile(x, z) {
+  // A muted, dark green-grey rather than the vivid green of the plain
+  // Grass Patch — meant for shadier, wooded corners of a build rather
+  // than open lawn.
+  const tex = makeSpeckledTexture('#3a4a3c', { count: 600, size: 2.5, alpha: 0.45, rgb: () => [45 + Math.random() * 30, 60 + Math.random() * 35, 48 + Math.random() * 30] }, { count: 8, minR: 6, maxR: 16, rgba: 'rgba(25,35,27,0.35)' });
+  tex.repeat.set(3, 3);
+  return makeGroundCoverTile(x, z, tex);
+}
+function makeFern(x, z) {
+  const g = new THREE.Group();
+  const mat = sharedDecorMat({ color: 0x3d6b34, roughness: 0.9, side: THREE.DoubleSide });
+  const fronds = 6 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < fronds; i++) {
+    const a = (i / fronds) * Math.PI * 2 + Math.random() * 0.3;
+    const len = 0.22 + Math.random() * 0.1;
+    const frond = new THREE.Mesh(new THREE.ConeGeometry(0.055, len, 4), mat);
+    frond.position.set(Math.cos(a) * 0.03, len / 2, Math.sin(a) * 0.03);
+    frond.rotation.z = Math.cos(a) * 0.9;
+    frond.rotation.x = -Math.sin(a) * 0.9;
+    frond.castShadow = true;
+    g.add(frond);
+  }
+  g.position.set(x, 0, z);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  g.userData.collideRadius = 0.22;
+  return g;
+}
+function makeDistel(x, z) {
+  const g = new THREE.Group();
+  const stemH = 0.28 + Math.random() * 0.08;
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, stemH, 5), sharedDecorMat({ color: 0x5a7a4a, roughness: 0.9 }));
+  stem.position.y = stemH / 2;
+  stem.castShadow = true;
+  g.add(stem);
+  const headMat = sharedDecorMat({ color: 0x8a5fa8, roughness: 0.8 });
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.055, 7, 6), headMat);
+  head.position.y = stemH;
+  head.castShadow = true;
+  g.add(head);
+  const spikeMat = sharedDecorMat({ color: 0x6b8a5a, roughness: 0.85 });
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.05, 4), spikeMat);
+    spike.position.set(Math.cos(a) * 0.05, stemH, Math.sin(a) * 0.05);
+    spike.rotation.z = Math.cos(a) * 1.3;
+    spike.rotation.x = -Math.sin(a) * 1.3;
+    g.add(spike);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.15;
+  return g;
+}
+function makeTreeStump(x, z) {
+  const g = new THREE.Group();
+  const h = 0.26 + Math.random() * 0.1;
+  const barkMat = sharedDecorMat({ color: 0x6b4a2c, roughness: 1 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.19, h, 9), barkMat);
+  body.position.y = h / 2;
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const topMat = sharedDecorMat({ color: 0xc9a06a, roughness: 0.9 });
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.155, 0.02, 9), topMat);
+  top.position.y = h + 0.01;
+  top.receiveShadow = true;
+  g.add(top);
+  // A couple of concentric growth rings on the cut surface — a small
+  // detail, but it's the one thing that visually says "stump" rather
+  // than just "short log standing on end".
+  const ringMat = sharedDecorMat({ color: 0x9a7a4a, roughness: 0.9 });
+  for (const r of [0.1, 0.06]) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(r - 0.008, r, 16), ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = h + 0.021;
+    g.add(ring);
+  }
+  g.position.set(x, 0, z);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  g.userData.collideRadius = 0.2;
+  return g;
+}
+function makeFallenLog(x, z) {
+  const g = new THREE.Group();
+  const len = 0.9 + Math.random() * 0.4;
+  const r = 0.13 + Math.random() * 0.03;
+  const barkMat = sharedDecorMat({ color: 0x6b4a2c, roughness: 1 });
+  const log = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.9, len, 8), barkMat);
+  log.rotation.z = Math.PI / 2;
+  log.position.y = r;
+  log.castShadow = true; log.receiveShadow = true;
+  g.add(log);
+  const capMat = sharedDecorMat({ color: 0xc9a06a, roughness: 0.9 });
+  const cap = new THREE.Mesh(new THREE.CircleGeometry(r * 0.95, 10), capMat);
+  cap.rotation.y = Math.PI / 2;
+  cap.position.set(len / 2, r, 0);
+  g.add(cap);
+  g.position.set(x, 0, z);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  g.userData.collideRadius = len / 2;
+  return g;
+}
+function makeWeepingWillow(x, z) {
+  const g = new THREE.Group();
+  const trunkH = 1.4 + Math.random() * 0.4;
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.19, trunkH, 7), sharedDecorMat({ color: 0x5a4530, roughness: 1 }));
+  trunk.position.y = trunkH / 2;
+  trunk.castShadow = true;
+  g.add(trunk);
+  const canopyMat = sharedDecorMat({ color: 0x6a8a4a, roughness: 0.9 });
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.55, 8, 6), canopyMat);
+  canopy.position.y = trunkH + 0.25;
+  canopy.scale.y = 0.7;
+  canopy.castShadow = true;
+  g.add(canopy);
+  // The drooping "curtain" of branches is what actually reads as a
+  // willow rather than just a round tree — a ring of long, thin, downward
+  // -tapering cones hanging from the canopy's own edge.
+  const drapeMat = sharedDecorMat({ color: 0x7fa25a, roughness: 0.85 });
+  const drapeCount = 10;
+  for (let i = 0; i < drapeCount; i++) {
+    const a = (i / drapeCount) * Math.PI * 2;
+    const drapeLen = 0.7 + Math.random() * 0.35;
+    const drape = new THREE.Mesh(new THREE.ConeGeometry(0.03, drapeLen, 4), drapeMat);
+    drape.position.set(Math.cos(a) * 0.48, trunkH + 0.2 - drapeLen / 2, Math.sin(a) * 0.48);
+    drape.rotation.x = Math.PI; // point downward
+    drape.castShadow = true;
+    g.add(drape);
+  }
+  g.position.set(x, 0, z);
+  g.scale.setScalar(0.85 + Math.random() * 0.3);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  g.userData.collideRadius = 0.6;
+  return g;
+}
+function makeReeds(x, z) {
+  const g = new THREE.Group();
+  const mat = sharedDecorMat({ color: 0x6a8a3f, roughness: 0.9 });
+  const tuftMat = sharedDecorMat({ color: 0x8a6a3a, roughness: 0.85 });
+  const stalks = 5 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < stalks; i++) {
+    const h = 0.7 + Math.random() * 0.5;
+    const ox = (Math.random() - 0.5) * 0.14, oz = (Math.random() - 0.5) * 0.14;
+    const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, h, 5), mat);
+    stalk.position.set(ox, h / 2, oz);
+    stalk.rotation.z = (Math.random() - 0.5) * 0.15;
+    stalk.castShadow = true;
+    g.add(stalk);
+    const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.14, 5), tuftMat);
+    tuft.position.set(ox, h + 0.05, oz);
+    g.add(tuft);
+  }
+  g.position.set(x, 0, z);
+  g.userData.collideRadius = 0.2;
+  return g;
+}
+function makeSeerose(x, z) {
+  const g = new THREE.Group();
+  const padMat = sharedDecorMat({ color: 0x3d6b3d, roughness: 0.7 });
+  const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.015, 10), padMat);
+  pad.position.y = 0.008;
+  pad.receiveShadow = true;
+  g.add(pad);
+  // A simple notch cut into the pad's edge, the one detail that tells
+  // it apart from a plain round leaf at a glance.
+  const notch = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 0.06), sharedDecorMat({ color: 0x2c4f2c, roughness: 0.8 }));
+  notch.position.set(0.11, 0.01, 0);
+  notch.rotation.y = Math.PI / 4;
+  g.add(notch);
+  const petalMat = sharedDecorMat({ color: 0xf0d8e8, roughness: 0.6 });
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const petal = new THREE.Mesh(new THREE.SphereGeometry(0.025, 5, 4), petalMat);
+    petal.position.set(Math.cos(a) * 0.03, 0.03, Math.sin(a) * 0.03);
+    g.add(petal);
+  }
+  const centerMat = sharedDecorMat({ color: 0xe8c840, roughness: 0.6 });
+  const center = new THREE.Mesh(new THREE.SphereGeometry(0.018, 5, 4), centerMat);
+  center.position.y = 0.035;
+  g.add(center);
+  g.position.set(x, 0, z);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  g.userData.collideRadius = 0.15;
+  return g;
+}
+function makeScarecrow(x, z) {
+  const g = new THREE.Group();
+  const woodMat = sharedDecorMat({ color: 0x8a6a3a, roughness: 1 });
+  const postH = 1.1;
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, postH, 6), woodMat);
+  post.position.y = postH / 2;
+  post.castShadow = true;
+  g.add(post);
+  const armLen = 0.6;
+  const arms = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, armLen, 6), woodMat);
+  arms.rotation.z = Math.PI / 2;
+  arms.position.y = postH * 0.72;
+  arms.castShadow = true;
+  g.add(arms);
+  const sackMat = sharedDecorMat({ color: 0xb08850, roughness: 0.95 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.42, 7), sackMat);
+  body.position.y = postH * 0.55;
+  body.castShadow = true;
+  g.add(body);
+  const headMat = sharedDecorMat({ color: 0xc9a468, roughness: 0.95 });
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 7, 6), headMat);
+  head.position.y = postH * 0.72 + 0.13;
+  head.castShadow = true;
+  g.add(head);
+  const hatMat = sharedDecorMat({ color: 0xe0c060, roughness: 0.9 });
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.02, 10), hatMat);
+  brim.position.y = postH * 0.72 + 0.22;
+  brim.castShadow = true;
+  g.add(brim);
+  const crown = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.16, 8), hatMat);
+  crown.position.y = postH * 0.72 + 0.31;
+  crown.castShadow = true;
+  g.add(crown);
+  g.position.set(x, 0, z);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  g.userData.collideRadius = 0.35;
+  return g;
+}
+function makeSunflower(x, z) {
+  const g = new THREE.Group();
+  const stemH = 0.55 + Math.random() * 0.2;
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.018, stemH, 6), sharedDecorMat({ color: 0x5a7a3a, roughness: 0.9 }));
+  stem.position.y = stemH / 2;
+  stem.castShadow = true;
+  g.add(stem);
+  const leafMat = sharedDecorMat({ color: 0x5a8a3a, roughness: 0.9, side: THREE.DoubleSide });
+  for (const [ly, lr] of [[stemH * 0.35, 1], [stemH * 0.6, -1]]) {
+    const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.16, 4), leafMat);
+    leaf.position.set(lr * 0.06, ly, 0);
+    leaf.rotation.z = lr * 1.2;
+    g.add(leaf);
+  }
+  const centerMat = sharedDecorMat({ color: 0x5a3a20, roughness: 0.85 });
+  const center = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.02, 10), centerMat);
+  center.rotation.x = Math.PI / 2;
+  center.position.y = stemH;
+  center.castShadow = true;
+  g.add(center);
+  const petalMat = sharedDecorMat({ color: 0xecc632, roughness: 0.7 });
+  const petals = 10;
+  for (let i = 0; i < petals; i++) {
+    const a = (i / petals) * Math.PI * 2;
+    const petal = new THREE.Mesh(new THREE.SphereGeometry(0.032, 5, 4), petalMat);
+    petal.scale.set(1, 0.5, 1.6);
+    petal.position.set(Math.cos(a) * 0.075, stemH, Math.sin(a) * 0.075);
+    petal.rotation.y = a;
+    g.add(petal);
+  }
+  g.position.set(x, 0, z);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  g.userData.collideRadius = 0.2;
+  return g;
+}
 
 /* ---------------- 15 additional Deko builders ---------------- */
 function makeBench(x, z) {
@@ -3675,6 +3985,24 @@ const DECOR_CATALOG = {
   laterne: { label: 'Lamppost', build: makeLampPost, randomRot: false, minSpacing: 0.5, cat: 'light' },
   blumenbeet: { label: 'Flowers', build: makeFlowerBed, randomRot: false, minSpacing: 0.35, cat: 'garden' },
   weg: { label: 'Path', build: makePathTile, randomRot: false, minSpacing: DECOR_GRID * 0.9, cat: 'nature' },
+  // Deliberately 0.9x their own size (not the shared DECOR_GRID's) —
+  // GROUND_TILE_SIZE is double DECOR_GRID, so this scales the exact same
+  // proportional margin the Path tile above uses, letting these sit
+  // snugly adjacent to tile across an area without overlapping.
+  wiese: { label: 'Grass Patch', build: makeWieseTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  kies: { label: 'Gravel Patch', build: makeKiesTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  acker: { label: 'Dirt Patch', build: makeAckerTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  blumenwiese: { label: 'Flower Meadow', build: makeBlumenwieseTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  moos: { label: 'Moss Patch', build: makeMoosTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  farn: { label: 'Fern', build: makeFern, randomRot: true, minSpacing: 0.25, cat: 'nature' },
+  distel: { label: 'Thistle', build: makeDistel, randomRot: true, minSpacing: 0.2, cat: 'nature' },
+  baumstumpf: { label: 'Tree Stump', build: makeTreeStump, randomRot: true, minSpacing: 0.35, cat: 'nature' },
+  baumstamm_liegend: { label: 'Fallen Log', build: makeFallenLog, randomRot: true, minSpacing: 0.6, cat: 'nature' },
+  trauerweide: { label: 'Weeping Willow', build: makeWeepingWillow, randomRot: true, minSpacing: 0.55, cat: 'nature' },
+  schilf: { label: 'Reeds', build: makeReeds, randomRot: true, minSpacing: 0.3, cat: 'nature' },
+  seerose: { label: 'Water Lily', build: makeSeerose, randomRot: true, minSpacing: 0.25, cat: 'nature' },
+  vogelscheuche: { label: 'Scarecrow', build: makeScarecrow, randomRot: true, minSpacing: 0.4, cat: 'nature' },
+  sonnenblume: { label: 'Sunflower', build: makeSunflower, randomRot: true, minSpacing: 0.25, cat: 'nature' },
   bank: { label: 'Bench', build: makeBench, randomRot: false, minSpacing: 0.7, cat: 'garden' },
   brunnen: { label: 'Fountain', build: makeFountain, randomRot: false, minSpacing: 0.7, cat: 'garden' },
   zaun: { label: 'Fence', build: makeFence, randomRot: false, minSpacing: 0.6, cat: 'garden' },
@@ -4750,6 +5078,9 @@ applyType();
 // which text used to quietly paper over.
 const DECOR_ICONS = {
   baum: '🌲', palme: '🌴', busch: '🌿', fels: '🪨', laterne: '🏮', blumenbeet: '💐', weg: '🟫',
+  wiese: '🟩', kies: '⚪', acker: '🟤', blumenwiese: '🌼', moos: '🟢',
+  farn: '🌱', distel: '🥀', baumstumpf: '⭕', baumstamm_liegend: '➖', trauerweide: '🌳',
+  schilf: '🎋', seerose: '🪷', vogelscheuche: '👒', sonnenblume: '🌻',
   bank: '🔶', brunnen: '⛲', zaun: '🚧', muelleimer: '🗑', sonnenschirm: '⛱', liegestuhl: '🏖',
   fass: '🛢', kiste: '📦', kaktus: '🌵', pilz: '🍄', blumentopf: '🪴', heuballen: '🌾',
   fackel: '🕯️', trittstein: '⬤', sandburg: '🏰',

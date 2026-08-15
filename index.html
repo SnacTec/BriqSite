@@ -904,7 +904,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v2.13</div>
+  <div id="versionLabel">v2.14</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -9548,52 +9548,69 @@ animate();
   const TEAM_COUNTED_KEY = 'briqsite_team_counted_v1';
 
   let db = null;
-  let initStarted = false;
+  let initPromise = null;
   // Deferred rather than run unconditionally at module load — the very
   // first time someone ever sees the consent popup, they answer it
   // AFTER this script has already started running, so initialisation
   // has to be something that can ALSO be triggered live, right when
   // they click "Ja", not only on a page that already had consent
   // granted from some earlier visit.
-  async function initFirebaseIfNeeded() {
-    if (initStarted || !hasFirebaseConsent()) return;
-    initStarted = true;
-    // Every single call in this file is wrapped to fail silently and
-    // never throw outward — the whole point of this feature is a nice-
-    // to-have fun stat, not something the game depends on. Offline, an
-    // ad blocker, App Check rejecting a request, the Firebase project
-    // not being set up yet (still showing the placeholders above) —
-    // none of that should ever be able to break or even visibly
-    // disrupt the actual game.
-    try {
-      const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js');
-      const { initializeAppCheck, ReCaptchaV3Provider } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-check.js');
-      const { getAuth, signInAnonymously } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
-      const { getFirestore, doc, onSnapshot } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js');
+  //
+  // Returns (and reuses) the SAME in-flight promise on every call
+  // rather than a plain boolean guard — accepting consent kicks this
+  // off from onConsentGranted, and picking a team moments later calls
+  // it AGAIN from onTeamChosen almost immediately afterwards, well
+  // before sign-in has actually finished. A boolean "already started"
+  // flag would make that second call return immediately without
+  // waiting for the first one to actually finish, leaving `db` still
+  // null right when onTeamChosen goes on to check it — silently
+  // skipping the count on exactly the most common real-world timing
+  // (consent, then picking a team a couple of seconds later) even
+  // though everything was otherwise configured correctly.
+  function initFirebaseIfNeeded() {
+    if (initPromise) return initPromise;
+    if (!hasFirebaseConsent()) return Promise.resolve();
+    initPromise = (async () => {
+      // Every single call in this file is wrapped to fail silently and
+      // never throw outward — the whole point of this feature is a
+      // nice-to-have fun stat, not something the game depends on.
+      // Offline, an ad blocker, App Check rejecting a request, the
+      // Firebase project not being set up yet (still showing the
+      // placeholders above) — none of that should ever be able to
+      // break or even visibly disrupt the actual game. Errors are
+      // still logged to the console (not surfaced to the player) so
+      // this stays diagnosable during setup instead of just silently
+      // never working.
+      try {
+        const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js');
+        const { initializeAppCheck, ReCaptchaV3Provider } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-check.js');
+        const { getAuth, signInAnonymously } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
+        const { getFirestore, doc, onSnapshot } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js');
 
-      const app = initializeApp(FIREBASE_CONFIG);
-      initializeAppCheck(app, {
-        provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
-        isTokenAutoRefreshEnabled: true,
-      });
-      const auth = getAuth(app);
-      db = getFirestore(app);
-      db._doc = doc; db._onSnapshot = onSnapshot; // stashed on the instance purely so onTeamChosen below (which needs `doc`/`updateDoc`/`increment` too) doesn't need its own separate dynamic import
+        const app = initializeApp(FIREBASE_CONFIG);
+        initializeAppCheck(app, {
+          provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
+          isTokenAutoRefreshEnabled: true,
+        });
+        const auth = getAuth(app);
+        db = getFirestore(app);
+        db._doc = doc; // stashed on the instance purely so onTeamChosen below (which needs `doc`/`updateDoc`/`increment` too) doesn't need its own separate dynamic import
 
-      await signInAnonymously(auth);
-      onSnapshot(doc(db, 'stats', 'teams'), (snap) => {
-        if (!snap.exists()) return;
-        const d = snap.data();
-        const vkeEl = document.getElementById('teamVkeCount');
-        const triqEl = document.getElementById('teamTriqbriqCount');
-        if (vkeEl) vkeEl.textContent = `${(d.vke || 0).toLocaleString('de-DE')} builders`;
-        if (triqEl) triqEl.textContent = `${(d.triqbriq || 0).toLocaleString('de-DE')} builders`;
-      }, () => { /* best-effort — the counts on the team cards just stay blank if this subscription ever errors out */ });
-    } catch (e) {
-      // Config still has placeholder values, the CDN import failed
-      // offline, or similar — the game itself is entirely unaffected
-      // either way, it just runs without any of this.
-    }
+        await signInAnonymously(auth);
+        onSnapshot(doc(db, 'stats', 'teams'), (snap) => {
+          if (!snap.exists()) return;
+          const d = snap.data();
+          const vkeEl = document.getElementById('teamVkeCount');
+          const triqEl = document.getElementById('teamTriqbriqCount');
+          if (vkeEl) vkeEl.textContent = `${(d.vke || 0).toLocaleString('de-DE')} builders`;
+          if (triqEl) triqEl.textContent = `${(d.triqbriq || 0).toLocaleString('de-DE')} builders`;
+        }, (err) => { console.error('[BriqStats] onSnapshot error:', err); });
+        console.log('[BriqStats] Firebase initialised OK, signed in as', auth.currentUser && auth.currentUser.uid);
+      } catch (e) {
+        console.error('[BriqStats] init failed:', e);
+      }
+    })();
+    return initPromise;
   }
 
   window.__briqStats = {
@@ -9607,12 +9624,13 @@ animate();
         if (localStorage.getItem(TEAM_COUNTED_KEY) === '1') return; // only the first-ever choice on this device counts, not later switches
       } catch (e) { return; } // if localStorage is unavailable, skip counting rather than risk double-counting every load
       await initFirebaseIfNeeded();
-      if (!db) return; // never actually got set up (offline, still-placeholder config, sign-in failed, etc.) — nothing to count against
+      if (!db) { console.error('[BriqStats] onTeamChosen: db still not ready, skipping count'); return; }
       try {
         const { updateDoc, increment } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js');
         await updateDoc(db._doc(db, 'stats', 'teams'), { [team]: increment(1) });
         localStorage.setItem(TEAM_COUNTED_KEY, '1');
-      } catch (e) { /* best-effort */ }
+        console.log('[BriqStats] counted team:', team);
+      } catch (e) { console.error('[BriqStats] increment failed:', e); }
     },
   };
 

@@ -517,6 +517,25 @@
   }
   #rotateBtn:active{transform:translateZ(0) scale(.92);}
 
+  /* Sits to the lower-left of the main action button (rotateBtn sits
+     above-left of it instead) — a distinct, secondary position so the
+     two are never confused for each other despite both only appearing
+     for Copy. */
+  #copyAnchorBtn{
+    position:absolute; right:98px; bottom:calc(30px + env(safe-area-inset-bottom)); z-index:12;
+    pointer-events:auto;
+    width:44px; height:44px; border-radius:50%;
+    background: radial-gradient(circle at 35% 30%, var(--oak-light), var(--oak) 65%, var(--oak-dark));
+    background-clip:padding-box;
+    border:3px solid rgba(255,255,255,.22);
+    box-shadow: var(--shadow);
+    color:var(--ink);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    transform:translateZ(0); backface-visibility:hidden; -webkit-backface-visibility:hidden;
+  }
+  #copyAnchorBtn:active{transform:translateZ(0) scale(.92);}
+
   #aimHint{
     position:absolute; left:50%; bottom:calc(96px + env(safe-area-inset-bottom));
     transform:translateX(-50%); max-width:200px; text-align:center;
@@ -841,7 +860,7 @@
      KeyR/Tab handler) — so on desktop these two buttons are pure
      redundant clutter rather than the only way to trigger either
      action, and can just be hidden outright. */
-  body.desktop-ui #actionBtn, body.desktop-ui #rotateBtn{display:none;}
+  body.desktop-ui #actionBtn, body.desktop-ui #rotateBtn, body.desktop-ui #copyAnchorBtn{display:none;}
   body.desktop-ui .group-label{font-size:11px;}
   body.desktop-ui #undoBtn, body.desktop-ui #achievementsBtn, body.desktop-ui #shareBtn,
   body.desktop-ui #fullscreenBtn, body.desktop-ui #infoBtn, body.desktop-ui #menuBtn{
@@ -884,7 +903,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v2.00</div>
+  <div id="versionLabel">v2.09</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1075,6 +1094,7 @@
        symbol, which looks pixelated once scaled up to the button's own
        size; a vector path never has that problem at any size or zoom. -->
   <button id="rotateBtn" title="Rotate"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7c3.3 0 6 2.7 6 6 0 1.4-.5 2.7-1.3 3.7l1.5 1.5C19.4 16.9 20 14.5 20 13c0-4.4-3.6-8-8-8zm-6 8c0-1.4.5-2.7 1.3-3.7L5.8 7.8C4.6 9.1 4 10.5 4 13c0 4.4 3.6 8 8 8v3l5-4-5-4v3c-3.3 0-6-2.7-6-6z"/></svg></button>
+  <button id="copyAnchorBtn" title="Ghost anchor point" style="display:none;"><svg id="copyAnchorIcon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><circle id="copyAnchorDot" cx="12" cy="12" r="2.3" fill="currentColor" stroke="none"/></svg></button>
 
   <div id="aimHint"></div>
   <div id="measureResult"></div>
@@ -2194,14 +2214,27 @@ setEnvironment(currentEnv);
 // Placing a Briq where a decorative prop stands must clear that prop out
 // of the way automatically, rather than letting the brick intersect it.
 function removePropsNear(cx, cz, halfW, halfD) {
+  const removedPositions = [];
   decorProps = decorProps.filter((p) => {
     const r = p.userData.collideRadius || 0.4;
     const dx = Math.max(Math.abs(p.position.x - cx) - halfW, 0);
     const dz = Math.max(Math.abs(p.position.z - cz) - halfD, 0);
     const hit = Math.hypot(dx, dz) <= r;
-    if (hit) scene.remove(p);
+    if (hit) { scene.remove(p); removedPositions.push([p.position.x, p.position.z]); }
     return !hit;
   });
+  // Also purge the same entries from this environment's own CACHED
+  // layout (envPropLayouts), not just the live decorProps meshes above
+  // — otherwise switching to a different environment and back restores
+  // the stale saved layout, which still lists this exact prop and
+  // regenerates it right back on top of the Briq that's now sitting
+  // there. Matched by exact position, since a prop's live mesh position
+  // is set directly from its layout entry's own x/z when it's built.
+  if (removedPositions.length && envPropLayouts[currentEnv]) {
+    envPropLayouts[currentEnv] = envPropLayouts[currentEnv].filter((entry) =>
+      !removedPositions.some(([px, pz]) => Math.abs(entry.x - px) < 1e-6 && Math.abs(entry.z - pz) < 1e-6)
+    );
+  }
   removePlacedDecorNear(cx, cz, halfW, halfD);
 }
 
@@ -4483,6 +4516,14 @@ function updateBriqControlsVisibility() {
   // Measure has no rotation concept of its own either — two points
   // don't have an "orientation" to flip.
   document.getElementById('rotateBtn').style.display = (isMeasure || (isCopy ? !clipboard : mainType === 'PLATTE')) ? 'none' : '';
+  // A long captured structure's ghost is centred on the aim point by
+  // default, which makes it hard to see exactly where either END of it
+  // would actually land — this button cycles which point of the ghost
+  // sits at the aim instead (its own centre, or one of two opposite
+  // corners), so an end can be lined up precisely. Only relevant for
+  // Copy, and only once there's actually a clipboard to show a ghost
+  // for at all.
+  document.getElementById('copyAnchorBtn').style.display = (isCopy && clipboard) ? '' : 'none';
 }
 document.getElementById('mainTypeGroup').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-type]');
@@ -5311,6 +5352,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' || e.code === 'Tab') { e.preventDefault(); performRotateAction(); }
   if (e.code === 'KeyQ') { mainType = mainType === 'WS20' ? 'WS25' : 'WS20'; if (!BRIQ_CATALOG[mainType].sizes[sizeKey]) sizeKey = Object.keys(BRIQ_CATALOG[mainType].sizes)[0]; applyType(); }
   if (e.code === 'KeyZ') { studded = !studded; applyType(); }
+  if (e.code === 'KeyV' && tool === 'copy' && clipboard) { cycleCopyGhostAnchorMode(); }
   if (e.code === 'Space' && exploreMode) { e.preventDefault(); jumpRequested = true; }
 });
 window.addEventListener('keyup', (e) => keys[e.code] = false);
@@ -7612,6 +7654,82 @@ function copyGroundXZ(hit) {
 // — dispatches by entry type exactly like pasteEntryAt itself does, but
 // only computes the cells (no placement, no side effects), so this can
 // be used purely to TEST whether a spot is actually free.
+// The vertical offset a paste should actually use: 0 whenever the whole
+// group would already sit somewhere without genuinely overlapping any
+// EXISTING Briq's own cells — resting flush on the ground, sitting
+// edge-to-edge or corner-to-corner next to something else, or landing
+// staggered like Lego on top of a course below (that's what the normal
+// support check already allows) are all still exactly dy=0, since none
+// of those actually share a cell with anything. Only stepped straight
+// up — one whole module course at a time, as a single rigid unit — for
+// as long as ANY entry would still genuinely intersect an
+// already-occupied cell. This is a deliberately narrower trigger than
+// an earlier attempt at this same idea: that one nudged pieces upward
+// as soon as they came NEAR another Briq (rather than only when they'd
+// truly overlap it), which broke ordinary flush/edge/corner placement
+// next to something else — real cell-level overlap is a much stricter
+// (and correct) test for "this needs to go up top instead".
+//
+// The step size is that shared module height (crossCells) when every
+// entry in the clipboard is the SAME main type — the common case, and
+// the only one this can guarantee perfect course alignment for, same
+// as stacking one WS25 module directly on, or Lego-staggered across,
+// another WS25 course below it. A clipboard mixing different main
+// types (rare) falls back to the finest possible step (1 cell) instead
+// — this still always finds a genuinely non-overlapping height, just
+// without promising every mixed piece lands exactly on ITS OWN natural
+// course boundary the way a same-type stack does.
+function computeCopyPasteRestY(entries, dx, dz) {
+  const types = new Set(entries.map((e) => e.mainType));
+  const uniformType = types.size === 1 ? [...types][0] : null;
+  const step = (uniformType && BRIQ_CATALOG[uniformType]) ? BRIQ_CATALOG[uniformType].crossCells : 1;
+  const MAX_LIFTS = Math.ceil((HEIGHT_MAX + 4) / CELL_M / Math.max(step, 1)); // generous cap derived from the world's own height limit, not a guessed constant
+  let dy = 0;
+  for (let i = 0; i <= MAX_LIFTS; i++) {
+    let overlaps = false;
+    for (const e of entries) {
+      for (const c of entryCellsAt(e, dx, dy, dz)) {
+        if (occupancy.has(key(...c))) { overlaps = true; break; }
+      }
+      if (overlaps) break;
+    }
+    if (!overlaps) return dy;
+    dy += step;
+  }
+  return 0; // safety net — should be unreachable given the cap above, but never loop forever or place absurdly high on some edge case this didn't anticipate
+}
+// The horizontal anchor a paste should actually land at. Ordinarily
+// just wherever's aimed — flush against a neighbour's side, or
+// anywhere at all on bare ground, both stay exactly at the raw aim,
+// which was already working correctly. But if placing there needs a
+// lift (computeCopyPasteRestY > 0, i.e. it would rest ON TOP of an
+// existing Briq), the horizontal position ALSO has to land on the same
+// stud/hole grid ordinary single-Briq placement already snaps to, and
+// for the identical physical reason (see computeAnchorFromHit's own
+// comment on it): two Briqs of the same main type only actually line
+// up — studs seating into the holes below — at specific offsets, never
+// at an arbitrary aimed cell. The cross axis must match exactly, and
+// the length axis only in whole multiples of the type's own crossCells
+// (its stud pitch, e.g. a WS25B50 landing dead-centred on another, or
+// offset by exactly half its own length — the classic Lego stagger —
+// but never partway between). Both requirements fall out of the exact
+// same simple rule: round to the nearest multiple of crossCells in
+// BOTH X and Z. That works because every same-type Briq anywhere
+// already sits on this identical grid, so "exactly matches the specific
+// Briq below" and "rounds to the shared grid" are the same thing.
+// Only meaningfully defined for a uniform clipboard of plain Briqs (one
+// main type, no Platte/Dach pieces, which don't have the same visible
+// stud geometry) — anything more mixed is left at the raw aim; the
+// overlap/lift logic above still applies regardless, this refinement
+// on top of it just doesn't additionally kick in.
+function resolveCopyPasteAnchor(entries, rawX, rawZ) {
+  if (computeCopyPasteRestY(entries, rawX, rawZ) === 0) return { x: rawX, z: rawZ };
+  const allPlainBricks = entries.every((e) => !e.isSlabBlock && !e.isRoofBlock);
+  const types = new Set(entries.map((e) => e.mainType));
+  if (!allPlainBricks || types.size !== 1) return { x: rawX, z: rawZ };
+  const crossCells = BRIQ_CATALOG[[...types][0]].crossCells;
+  return { x: Math.round(rawX / crossCells) * crossCells, z: Math.round(rawZ / crossCells) * crossCells };
+}
 function entryCellsAt(e, dx, dy, dz) {
   if (e.isRoofBlock) {
     const crossCells = BRIQ_CATALOG.DACH.crossCells;
@@ -7726,6 +7844,38 @@ function pasteEntryAt(e, dx, dy, dz) {
 // exclusive), at any height, and re-bases their coordinates so (x0,z0)
 // becomes the clipboard's own local (0,0) — paste then only has to add
 // the target anchor back on, regardless of where the copy was made.
+// Re-bases the WHOLE clipboard to a tight bounding box around its
+// actual captured content, rather than whatever rectangle the player
+// happened to mark (which is very often bigger than the piece itself —
+// nobody drags a pixel-perfect box around a single Briq). Sets w/d/
+// minY/maxY from that tight box and shifts every entry so it starts at
+// local (0,0). Shared by captureClipboard AND rotateClipboard90 so the
+// two can never drift out of sync with each other — this exact
+// mismatch (capture leaving a "phantom margin" that rotating away
+// happened to silently fix) was the actual cause of copy-paste's
+// horizontal alignment looking correct only after rotating: this
+// margin, baked into an oversized w/d, offset copyPasteAnchor's own
+// centring math by however much bigger the marked rectangle was than
+// the piece itself, and no later fix downstream (including the
+// stud/hole grid snapping) could ever correct for a wrong bounding box
+// this early in the pipeline.
+function rebaseClipboardToTightBounds() {
+  if (!clipboard || clipboard.entries.length === 0) return;
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const e of clipboard.entries) {
+    const box = entryExclusiveBox(e);
+    minX = Math.min(minX, box.x0); maxX = Math.max(maxX, box.x1);
+    minZ = Math.min(minZ, box.z0); maxZ = Math.max(maxZ, box.z1);
+    minY = Math.min(minY, box.y0); maxY = Math.max(maxY, box.y1);
+  }
+  if (minX !== 0 || minZ !== 0) {
+    for (const e of clipboard.entries) shiftCaptureEntry(e, -minX, 0, -minZ);
+  }
+  clipboard.w = maxX - minX;
+  clipboard.d = maxZ - minZ;
+  clipboard.minY = minY;
+  clipboard.maxY = maxY;
+}
 function captureClipboard(x0, x1, z0, z1) {
   clearCopyAreaHighlights(); // the marking phase is over the moment a capture is attempted, successful or not — nothing left to show as "about to be captured"
   const entries = [];
@@ -7739,6 +7889,7 @@ function captureClipboard(x0, x1, z0, z1) {
   if (entries.length === 0) { clipboard = null; clearClipboardPreview(); return; }
   for (const e of entries) shiftCaptureEntry(e, -x0, 0, -z0);
   clipboard = { entries, w: x1 - x0, d: z1 - z0, minY, maxY };
+  rebaseClipboardToTightBounds(); // corrects w/d/entries down to the ACTUAL captured footprint, not the (usually larger) marked rectangle
   buildClipboardPreview();
 }
 function clearClipboard() {
@@ -7756,9 +7907,10 @@ function clearClipboard() {
 // together in one step.
 function pasteClipboardAt(tx, tz) {
   if (!clipboard) return 0;
+  const restY = computeCopyPasteRestY(clipboard.entries, tx, tz);
   const placedIds = [];
   for (const e of clipboard.entries) {
-    const id = pasteEntryAt(e, tx, 0, tz);
+    const id = pasteEntryAt(e, tx, restY, tz);
     if (id !== null && id !== false) placedIds.push(id);
   }
   if (placedIds.length > 0) {
@@ -7771,19 +7923,36 @@ function pasteClipboardAt(tx, tz) {
   return placedIds.length;
 }
 // Where the clipboard's own local (0,0) corner should land for a paste
-// aimed at `cur` — simply centred on the aim point, one-to-one with
-// wherever the cursor actually is. An earlier version of this also
-// snapped to a computed grid to try to line up flush/half-offset with
-// whatever's underneath, but that made the preview's position harder
-// to predict than it helped — removed for now in favour of this
-// simple, always-predictable behaviour. The height (see
-// copyPasteRestY, used alongside this) is unaffected by this choice —
-// that's found by genuine collision testing regardless of how the
-// X/Z anchor itself is computed.
+// aimed at `cur`. Which specific point of the clipboard sits AT `cur`
+// depends on copyGhostAnchorMode: normally its own centre (one-to-one,
+// wherever the cursor actually is), but for a long structure that
+// centre sitting at screen-centre makes it hard to actually see either
+// END land — cycling to one of the two opposite corners instead pins
+// that exact end at the aim point, so it can be lined up precisely.
+// An earlier version of this also snapped to a computed grid to try to
+// line up flush/half-offset with whatever's underneath, but that made
+// the preview's position harder to predict than it helped — removed
+// for now in favour of this simple, always-predictable behaviour. The
+// height (see computeCopyPasteRestY, used alongside this) is
+// unaffected by either choice — that's found by genuine collision
+// testing regardless of how the X/Z anchor itself is computed.
+let copyGhostAnchorMode = 'center'; // 'center' | 'corner1' | 'corner2'
+function cycleCopyGhostAnchorMode() {
+  copyGhostAnchorMode = copyGhostAnchorMode === 'center' ? 'corner1' : copyGhostAnchorMode === 'corner1' ? 'corner2' : 'center';
+  const dot = document.getElementById('copyAnchorDot');
+  if (dot) {
+    if (copyGhostAnchorMode === 'corner1') { dot.setAttribute('cx', '7'); dot.setAttribute('cy', '17'); }
+    else if (copyGhostAnchorMode === 'corner2') { dot.setAttribute('cx', '17'); dot.setAttribute('cy', '17'); }
+    else { dot.setAttribute('cx', '12'); dot.setAttribute('cy', '12'); }
+  }
+}
 function copyPasteAnchor(cur) {
   if (!clipboard) return cur;
+  if (copyGhostAnchorMode === 'corner1') return { x: cur.x, z: cur.z };
+  if (copyGhostAnchorMode === 'corner2') return { x: cur.x - (clipboard.w - 1), z: cur.z - (clipboard.d - 1) };
   return { x: cur.x - Math.floor(clipboard.w / 2), z: cur.z - Math.floor(clipboard.d / 2) };
 }
+document.getElementById('copyAnchorBtn').addEventListener('click', cycleCopyGhostAnchorMode);
 // Every entry's footprint as an EXCLUSIVE box {x0,x1,z0,z1} plus its
 // vertical extent {y0,y1} (inclusive) — the common shape all three kinds
 // (regular Briq, Platte, Dach) get reduced to for rotation and for
@@ -7838,18 +8007,7 @@ function rotateClipboard90() {
     else if (e.isSlabBlock) rotateSlabEntry90(e);
     else rotateBrickEntry90(e);
   }
-  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const e of clipboard.entries) {
-    const box = entryExclusiveBox(e);
-    minX = Math.min(minX, box.x0); maxX = Math.max(maxX, box.x1);
-    minZ = Math.min(minZ, box.z0); maxZ = Math.max(maxZ, box.z1);
-    minY = Math.min(minY, box.y0); maxY = Math.max(maxY, box.y1);
-  }
-  for (const e of clipboard.entries) shiftCaptureEntry(e, -minX, 0, -minZ);
-  clipboard.w = maxX - minX;
-  clipboard.d = maxZ - minZ;
-  clipboard.minY = minY;
-  clipboard.maxY = maxY;
+  rebaseClipboardToTightBounds();
   buildClipboardPreview();
 }
 // Reads the CURRENT aim (refreshed every frame by updateCopyAimAndGhost,
@@ -7860,7 +8018,8 @@ function doCopyAction() {
   const cur = currentCopyCorner;
   if (!cur) return;
   if (clipboard) {
-    const a = copyPasteAnchor(cur);
+    const a0 = copyPasteAnchor(cur);
+    const a = resolveCopyPasteAnchor(clipboard.entries, a0.x, a0.z);
     pasteClipboardAt(a.x, a.z);
     return;
   }
@@ -7870,6 +8029,31 @@ function doCopyAction() {
   copyStart = null;
   captureClipboard(x0, x1, z0, z1);
   updateBriqControlsVisibility();
+}
+// Which entries would ACTUALLY end up placed if pasted right now —
+// checked in the SAME order, one at a time, that pasteClipboardAt
+// itself places them in, rather than judging every entry independently
+// against every OTHER entry's cells regardless of whether that other
+// entry would even succeed. That distinction matters: if an earlier
+// entry fails (no room, or the ground/Briq it needed for support isn't
+// really there), anything counting on ITS cells for support needs to
+// fail too — its support was never actually going to exist. Judging
+// entries independently made a piece look validly supported (and get
+// shown blue) purely because some OTHER piece's cells were included as
+// theoretical support, even when THAT piece itself was doomed to be
+// skipped — so it would silently fail at the real paste despite having
+// been shown as fine a moment earlier.
+function computeEntryValidityFlags(entries, dx, dy, dz) {
+  const virtualCells = new Set();
+  const flags = [];
+  for (const e of entries) {
+    const valid = entryValidAt(e, dx, dy, dz, virtualCells);
+    flags.push(valid);
+    if (valid) {
+      for (const c of entryCellsAt(e, dx, dy, dz)) virtualCells.add(c.join('_'));
+    }
+  }
+  return flags;
 }
 function updateCopyAimAndGhost() {
   const hit = raycastAim();
@@ -7885,25 +8069,21 @@ function updateCopyAimAndGhost() {
     if (copyGhostMesh && copyGhostMesh.parent) scene.remove(copyGhostMesh);
     clearCopyAreaHighlights(); // marking is over once a clipboard exists — nothing left to highlight as "about to be captured"
     if (clipboardPreviewGroup) {
-      const a = copyPasteAnchor(cur);
-      clipboardPreviewGroup.position.set(a.x * CELL_M, 0, a.z * CELL_M);
-      // Every cell the WHOLE clipboard would occupy here, gathered once
-      // up front — this is what lets an upper course rest on the one
-      // below it from the SAME paste (see entryValidAt's own comment on
-      // why that's needed), rather than only ever seeing what's already
-      // really built.
-      const virtualCells = new Set();
-      for (const e of clipboard.entries) {
-        for (const c of entryCellsAt(e, a.x, 0, a.z)) virtualCells.add(c.join('_'));
-      }
+      const a0 = copyPasteAnchor(cur);
+      const a = resolveCopyPasteAnchor(clipboard.entries, a0.x, a0.z);
+      const restY = computeCopyPasteRestY(clipboard.entries, a.x, a.z);
+      clipboardPreviewGroup.position.set(a.x * CELL_M, restY * CELL_M, a.z * CELL_M);
       // Per-piece colour, not one verdict for the whole group — pasting
       // was never all-or-nothing (see pasteClipboardAt's own comment on
       // that), so this shows exactly which pieces would actually land
       // (blue) and which would be silently skipped (red) — checked at
-      // the SAME fixed height (dy=0) the paste itself now always uses.
+      // the SAME height (restY) the paste itself would actually use,
+      // and in the SAME sequential order (see computeEntryValidityFlags'
+      // own comment on why that specifically matters).
+      const flags = computeEntryValidityFlags(clipboard.entries, a.x, restY, a.z);
       clipboard.entries.forEach((e, i) => {
         const mesh = clipboardPreviewGroup.children[i];
-        if (mesh) mesh.material = entryValidAt(e, a.x, 0, a.z, virtualCells) ? copyPreviewMat : copyPreviewInvalidMat;
+        if (mesh) mesh.material = flags[i] ? copyPreviewMat : copyPreviewInvalidMat;
       });
       if (!clipboardPreviewGroup.parent) scene.add(clipboardPreviewGroup);
     }
@@ -8717,9 +8897,25 @@ function animate() {
 
 /* ---------------- Intro modal ---------------- */
 function fillIntro() {
-  document.getElementById('introText').textContent = touchUI
-    ? 'Tip: turn your phone sideways (landscape) to see more of the build area, and use the ⛶ button any time to go fullscreen. Tap the ℹ button for the full controls.'
-    : 'Tip: use the ⛶ button or F11 for fullscreen. Click the ℹ button any time for the full controls.';
+  // iOS gets its own branch here rather than falling into the generic
+  // touchUI one — the ⛶ fullscreen button is hidden outright on iOS
+  // Safari (the Fullscreen API isn't available there for ordinary page
+  // content at all), so telling an iPhone/iPad player to "use the ⛶
+  // button" pointed them at a button that, for them specifically,
+  // simply doesn't exist. The one thing that actually gets them a
+  // fullscreen-like result there — Add to Home Screen, which launches
+  // without Safari's own address bar — needs to be the FIRST thing
+  // they see, not something buried in the Info screen that most people
+  // never open unprompted.
+  let text;
+  if (isIOS && !isStandalone) {
+    text = 'Tip: turn your phone sideways (landscape) to see more of the build area. For true fullscreen on iPhone/iPad, tap Share → Add to Home Screen. Tap the ℹ button for the full controls.';
+  } else if (touchUI) {
+    text = 'Tip: turn your phone sideways (landscape) to see more of the build area, and use the ⛶ button any time to go fullscreen. Tap the ℹ button for the full controls.';
+  } else {
+    text = 'Tip: use the ⛶ button or F11 for fullscreen. Click the ℹ button any time for the full controls.';
+  }
+  document.getElementById('introText').textContent = text;
 }
 function fillInfoControls() {
   const container = document.getElementById('infoControls');

@@ -904,7 +904,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v2.14</div>
+  <div id="versionLabel">v2.15</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -9546,6 +9546,30 @@ animate();
   };
   const RECAPTCHA_SITE_KEY = '6LcnG4ctAAAAAJTODjyN6h6EVwAUY-dQdI4zS-Br';
   const TEAM_COUNTED_KEY = 'briqsite_team_counted_v1';
+  const TEAM_COUNTS_CACHE_KEY = 'briqsite_team_counts_cache_v1';
+
+  // Shows the last known counts (from whenever they were last
+  // successfully fetched, possibly a prior visit) IMMEDIATELY, rather
+  // than leaving the team cards blank for however long sign-in and the
+  // live Firestore round trip take — a real Firebase round trip
+  // (module loading, anonymous sign-in, an App Check/reCAPTCHA token,
+  // then the actual Firestore read) realistically takes a few seconds
+  // end to end, which is fine for a background fun-stat but not
+  // something worth actually making a first-time player wait and stare
+  // at a blank line for. This is naturally a little stale on the very
+  // next visit rather than perfectly live, and gets silently corrected
+  // in place the moment the real value actually arrives.
+  (function showCachedTeamCountsImmediately() {
+    if (!hasFirebaseConsent()) return; // respects a decline just as completely as everything else here
+    try {
+      const cached = JSON.parse(localStorage.getItem(TEAM_COUNTS_CACHE_KEY) || 'null');
+      if (!cached) return;
+      const vkeEl = document.getElementById('teamVkeCount');
+      const triqEl = document.getElementById('teamTriqbriqCount');
+      if (vkeEl) vkeEl.textContent = `${(cached.vke || 0).toLocaleString('de-DE')} builders`;
+      if (triqEl) triqEl.textContent = `${(cached.triqbriq || 0).toLocaleString('de-DE')} builders`;
+    } catch (e) { /* best-effort — no cached value yet, or it's corrupt; the cards just stay blank until the live value arrives */ }
+  })();
 
   let db = null;
   let initPromise = null;
@@ -9582,10 +9606,22 @@ animate();
       // this stays diagnosable during setup instead of just silently
       // never working.
       try {
-        const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js');
-        const { initializeAppCheck, ReCaptchaV3Provider } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-check.js');
-        const { getAuth, signInAnonymously } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
-        const { getFirestore, doc, onSnapshot } = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js');
+        // Loaded in parallel (Promise.all), not one after another —
+        // these four modules don't depend on each other at all, so
+        // awaiting each import before even starting the next one was
+        // pure wasted time, stacking up four separate network round
+        // trips back to back instead of overlapping them.
+        const [
+          { initializeApp },
+          { initializeAppCheck, ReCaptchaV3Provider },
+          { getAuth, signInAnonymously },
+          { getFirestore, doc, onSnapshot },
+        ] = await Promise.all([
+          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js'),
+          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-check.js'),
+          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js'),
+          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'),
+        ]);
 
         const app = initializeApp(FIREBASE_CONFIG);
         initializeAppCheck(app, {
@@ -9600,10 +9636,17 @@ animate();
         onSnapshot(doc(db, 'stats', 'teams'), (snap) => {
           if (!snap.exists()) return;
           const d = snap.data();
+          const vke = d.vke || 0, triqbriq = d.triqbriq || 0;
           const vkeEl = document.getElementById('teamVkeCount');
           const triqEl = document.getElementById('teamTriqbriqCount');
-          if (vkeEl) vkeEl.textContent = `${(d.vke || 0).toLocaleString('de-DE')} builders`;
-          if (triqEl) triqEl.textContent = `${(d.triqbriq || 0).toLocaleString('de-DE')} builders`;
+          if (vkeEl) vkeEl.textContent = `${vke.toLocaleString('de-DE')} builders`;
+          if (triqEl) triqEl.textContent = `${triqbriq.toLocaleString('de-DE')} builders`;
+          // Cached locally purely so the NEXT visit can show a number
+          // (last known, possibly a little stale) instantly instead of
+          // sitting blank for however long sign-in + this same round
+          // trip takes all over again — see the cache read near the top
+          // of this file for where this actually gets used.
+          try { localStorage.setItem(TEAM_COUNTS_CACHE_KEY, JSON.stringify({ vke, triqbriq })); } catch (e) {}
         }, (err) => { console.error('[BriqStats] onSnapshot error:', err); });
         console.log('[BriqStats] Firebase initialised OK, signed in as', auth.currentUser && auth.currentUser.uid);
       } catch (e) {

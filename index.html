@@ -9,7 +9,36 @@
 <meta name="theme-color" content="#20180f">
 <title>BriqSite — Build Your House</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CjxyZWN0IHg9IjIiIHk9IjIiIHdpZHRoPSI2MCIgaGVpZ2h0PSI2MCIgcng9IjEyIiBmaWxsPSIjMjAxODBmIi8+CjxjaXJjbGUgY3g9IjIyIiBjeT0iMjAiIHI9IjciIGZpbGw9IiNjOThhNGIiIHN0cm9rZT0iIzhhNWEyYyIgc3Ryb2tlLXdpZHRoPSIyIi8+CjxjaXJjbGUgY3g9IjQyIiBjeT0iMjAiIHI9IjciIGZpbGw9IiNjOThhNGIiIHN0cm9rZT0iIzhhNWEyYyIgc3Ryb2tlLXdpZHRoPSIyIi8+CjxyZWN0IHg9IjkiIHk9IjI2IiB3aWR0aD0iNDYiIGhlaWdodD0iMjgiIHJ4PSI1IiBmaWxsPSIjYzk4YTRiIiBzdHJva2U9IiM4YTVhMmMiIHN0cm9rZS13aWR0aD0iMiIvPgo8L3N2Zz4=">
-<!-- Best-effort cache busting for GitHub Pages: browsers aren't required to
+<script>
+// Warms up the network connection (DNS lookup + TLS handshake) to the
+// domains the Firebase team-counter feature will need — but ONLY if
+// consent was already granted in a PREVIOUS session. This is
+// deliberately a plain synchronous <script>, not part of the main
+// module script further down, specifically so it can run this early
+// (right in <head>, before the page has even finished parsing) and
+// still respect consent correctly: a naive version of this using
+// static <link rel="preconnect"> tags would have the browser start
+// that handshake unconditionally on every load, including for a
+// brand new visitor who hasn't even been asked yet, or someone who
+// already said no — reaching out to Google's own servers before (or
+// despite) that decision is exactly the kind of thing the whole
+// consent flow exists to prevent, even though no actual application
+// data is exchanged by a preconnect itself (it's just DNS + a TLS
+// handshake) — the IP-level contact with a third party is still
+// something that shouldn't happen ahead of, or instead of, an
+// explicit yes.
+try {
+  if (localStorage.getItem('briqsite_firebase_consent_v1') === 'granted') {
+    ['https://www.gstatic.com', 'https://www.google.com', 'https://firestore.googleapis.com', 'https://identitytoolkit.googleapis.com', 'https://firebaseappcheck.googleapis.com'].forEach((href) => {
+      const link = document.createElement('link');
+      link.rel = 'preconnect';
+      link.href = href;
+      link.crossOrigin = 'anonymous';
+      document.head.appendChild(link);
+    });
+  }
+} catch (e) { /* best-effort — localStorage unavailable or blocked; no preconnect, no harm done */ }
+</script><!-- Best-effort cache busting for GitHub Pages: browsers aren't required to
      honour these (real HTTP headers matter more, and GitHub Pages doesn't
      let you set those), but most modern browsers do respect them for the
      top-level HTML document, so this reduces how often a hard refresh is
@@ -801,6 +830,27 @@
   #madeByTag:hover{color:rgba(243,232,210,.85); background:rgba(32,24,15,.5);}
   #madeByTag svg{width:9px; height:9px; flex-shrink:0;}
 
+  /* Desktop-only keyboard legend — bottom-right corner, well out of the
+     way of the dock (which only occupies its own actual content width
+     on the left, despite its outer wrapper spanning full-width with
+     pointer-events:none) and the top-right icon row. Deliberately as
+     unobtrusive as the made-by tag: tiny, low-opacity, non-interactive
+     (pointer-events:none, so it can never intercept a click meant for
+     whatever's underneath it, though nothing normally sits there
+     anyway) — a quiet reference for anyone who wants it, not something
+     competing for attention with the actual play area.
+     Hidden entirely on touch — none of these keys exist there. */
+  #keyboardLegend{
+    display:none;
+    position:absolute; right:10px; bottom:calc(10px + env(safe-area-inset-bottom)); z-index:11;
+    pointer-events:none;
+    font-size:10.5px; line-height:1.6; color:rgba(243,232,210,.4);
+    background:rgba(32,24,15,.25); border-radius:8px; padding:6px 10px;
+    text-align:right;
+  }
+  #keyboardLegend .kbd{color:rgba(243,232,210,.65); font-weight:700;}
+  body.desktop-ui #keyboardLegend{display:block;}
+
   @media (max-width: 560px){
     .btn{padding:8px 8px; min-width:38px;}
     #actionBtn{width:64px;height:64px;}
@@ -904,7 +954,7 @@
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v2.16</div>
+  <div id="versionLabel">v2.26</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1106,6 +1156,16 @@
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.48-.9 1.63-1.85 3.35-1.85 3.58 0 4.25 2.36 4.25 5.43v6.31zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM3.56 20.45h3.56V9H3.56v11.45z"/></svg>
     Made by Kevin Kupper
   </a>
+
+  <div id="keyboardLegend">
+    <div><span class="kbd">WASD</span> Move</div>
+    <div><span class="kbd">Mouse</span> Look</div>
+    <div><span class="kbd">Click/F</span> Place</div>
+    <div><span class="kbd">R</span> Rotate</div>
+    <div><span class="kbd">Q</span> Type <span class="kbd">Z</span> Studs</div>
+    <div id="keyboardLegendVertical"><span class="kbd">Space</span> Up <span class="kbd">Shift</span> Down</div>
+    <div id="keyboardLegendCopyAnchor" style="display:none;"><span class="kbd">V</span> Ghost anchor</div>
+  </div>
 
   <div class="modal-bg" id="firebaseConsentModal" style="display:none;">
     <div class="modal">
@@ -1354,6 +1414,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* ============================================================
    BriqSite — voxel-style building game
@@ -4253,30 +4314,62 @@ function getStudGeo(crossSection) {
   }
   return studGeoCache[k];
 }
-function addStuds(mesh, len, crossSection, mat, studded) {
-  if (!studded) return; // "oZ" — ohne Zapfen
-  const { bodyGeo, capGeo, bodyH, capH } = getStudGeo(crossSection);
-  const surfaceY = crossSection / 2;
-  // One stud per module of length (a module = the main type's own
-  // cross-section, i.e. its shortest size): a short cube gets 1 centred
-  // stud, a "long" (2-module) piece gets 2, and the long lintels get one
-  // per module in the same known spacing — 8 for WS25B200, 16 for
-  // WS25B400 — each stud centred within its own module segment.
-  const moduleCount = Math.max(1, Math.round(len / crossSection));
-  const positions = [];
-  for (let i = 0; i < moduleCount; i++) {
-    positions.push((i + 0.5) * crossSection - len / 2);
+// Every REAL placed Briq used to be up to 34 separate mesh objects: 1
+// body + 1 edge outline + up to 32 individual stud body/cap meshes (a
+// WS25B400 has 16 studs, each its own body-plus-cap pair) — each one
+// its own draw call, and each one ALSO its own shadow-caster. A single
+// wall of a thousand-plus Briqs (an entirely ordinary thing to build)
+// could genuinely mean tens of thousands of draw calls just from studs
+// alone, which is exactly the kind of thing that runs fine on a brand
+// new flagship phone's GPU and grinds an older/mid-range one to a
+// halt. The studs' own geometry never changes shape for a given
+// (mainType, lengthCells) — only WHERE the finished mesh sits in the
+// world differs — so it can be baked directly into one shared,
+// cached, merged geometry per shape instead of re-added as separate
+// child meshes on every single instance. Every Briq of the same
+// shape then costs exactly ONE draw call for its body+studs together,
+// the same as an unstudded one already did.
+const studdedBrickGeoCache = {};
+function getStuddedBrickGeo(mainType, lengthCells) {
+  const crossCells = BRIQ_CATALOG[mainType].crossCells;
+  const k = mainType + '_' + lengthCells;
+  if (!studdedBrickGeoCache[k]) {
+    const lenM = lengthCells * CELL_M, crossM = crossCells * CELL_M;
+    const parts = [getBrickGeo(mainType, lengthCells).clone()];
+    const { bodyGeo, capGeo, bodyH, capH } = getStudGeo(crossM);
+    const surfaceY = crossM / 2;
+    const moduleCount = Math.max(1, Math.round(lenM / crossM));
+    for (let i = 0; i < moduleCount; i++) {
+      const x = (i + 0.5) * crossM - lenM / 2;
+      const body = bodyGeo.clone();
+      body.translate(x, surfaceY + bodyH / 2, 0);
+      parts.push(body);
+      const cap = capGeo.clone();
+      cap.translate(x, surfaceY + bodyH + capH / 2, 0);
+      parts.push(cap);
+    }
+    studdedBrickGeoCache[k] = mergeGeometries(parts, false);
+    for (let i = 1; i < parts.length; i++) parts[i].dispose(); // the clones themselves are single-use scratch copies once merged — only the merged result (and the ORIGINAL cached body/stud geometries the clones were made from) needs to stick around
   }
-  positions.forEach((x) => {
-    const body = new THREE.Mesh(bodyGeo, mat);
-    body.position.set(x, surfaceY + bodyH / 2, 0);
-    body.castShadow = true;
-    mesh.add(body);
-    const cap = new THREE.Mesh(capGeo, mat);
-    cap.position.set(x, surfaceY + bodyH + capH / 2, 0);
-    cap.castShadow = true;
-    mesh.add(cap);
-  });
+  return studdedBrickGeoCache[k];
+}
+// The wireframe edge outline is derived purely from a Briq's plain body
+// shape (studs deliberately excluded — an outline traced around a
+// cluster of tiny stud cylinders would look like visual noise, not a
+// clean silhouette), so it's identical for every instance of the same
+// (mainType, lengthCells) — cached here for the same reason the body
+// and studded geometry above are: it used to be freshly rebuilt (a
+// real, non-trivial CPU computation, not just a cheap object literal)
+// on every single Briq placed, even though a thousand Briqs of the
+// same handful of standard sizes only ever need a handful of distinct
+// outline shapes between them.
+const brickEdgesGeoCache = {};
+function getBrickEdgesGeo(mainType, lengthCells) {
+  const k = mainType + '_' + lengthCells;
+  if (!brickEdgesGeoCache[k]) {
+    brickEdgesGeoCache[k] = new THREE.EdgesGeometry(getBrickGeo(mainType, lengthCells));
+  }
+  return brickEdgesGeoCache[k];
 }
 
 const ghostMatValid = new THREE.MeshBasicMaterial({ color: 0x8fc79d, transparent: true, opacity: 0.55, depthWrite: false });
@@ -4408,7 +4501,7 @@ function placeBrick(anchor, lengthCells, orientation, mainType, studded, force, 
     (fp.x0 + fp.x1 + 1) / 2 * CELL_M, (fp.z0 + fp.z1 + 1) / 2 * CELL_M,
     (fp.x1 - fp.x0 + 1) / 2 * CELL_M, (fp.z1 - fp.z0 + 1) / 2 * CELL_M,
   );
-  const geo = getBrickGeo(mainType, lengthCells);
+  const geo = studded ? getStuddedBrickGeo(mainType, lengthCells) : getBrickGeo(mainType, lengthCells);
   const woodMat = getWoodMatTinted(mainType, lengthCells, color);
   const mesh = new THREE.Mesh(geo, woodMat);
   const c = brickCenterWorld(fp);
@@ -4416,9 +4509,8 @@ function placeBrick(anchor, lengthCells, orientation, mainType, studded, force, 
   if (orientation === 'z') mesh.rotation.y = Math.PI / 2;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat);
+  const edges = new THREE.LineSegments(getBrickEdgesGeo(mainType, lengthCells), edgeMat);
   mesh.add(edges);
-  addStuds(mesh, lengthCells * CELL_M, crossCells * CELL_M, woodMat, studded);
   scene.add(mesh);
 
   const id = nextBrickId++;
@@ -4540,6 +4632,7 @@ function updateBriqControlsVisibility() {
   // Copy, and only once there's actually a clipboard to show a ghost
   // for at all.
   document.getElementById('copyAnchorBtn').style.display = (isCopy && clipboard) ? '' : 'none';
+  document.getElementById('keyboardLegendCopyAnchor').style.display = (isCopy && clipboard) ? '' : 'none';
 }
 document.getElementById('mainTypeGroup').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-type]');
@@ -5070,15 +5163,32 @@ function isSolidCellAtMeters(wx, wy, wz) {
 // beyond anything this game's own height limit allows in the first
 // place, so there's no need for a separate incrementally-maintained
 // heightmap purely to speed this up.
-function exploreGroundHeightAt(wx, wz) {
+// The height of the topmost occupied cell in this (wx,wz) column, AT
+// OR BELOW maxY — never anything higher than that, however tall the
+// build actually gets. That cap is essential, not just an
+// optimisation: without it, this scans down from the absolute top of
+// the whole build regardless of where the player actually is, so a
+// doorway with a real lintel — solid wall connecting both sides above
+// the opening, exactly what an actual doorway looks like, see the
+// screenshot this was reported from — reads as "ground" at the
+// LINTEL's own height, even while the player is walking normally
+// underneath it on the real floor far below. Every earlier attempt at
+// this bug missed that entirely, because every earlier test only ever
+// built two disconnected corner pillars with open sky in between —
+// missing the one structural detail (something solid ABOVE the
+// player, not just beside them) that the reported wall always had.
+function exploreGroundHeightAt(wx, wz, maxY) {
   const cx = Math.round(wx / CELL_M);
   const cz = Math.round(wz / CELL_M);
   // Starts from the actual tallest cell ever built (plus a little
-  // headroom) instead of the theoretical world ceiling — a typical
-  // build is nowhere near HEIGHT_MAX tall, so scanning down from there
-  // every single call wasted the overwhelming majority of its own
-  // iterations checking empty air above anything that actually exists.
-  const topCell = Math.min(Math.round((HEIGHT_MAX + 4) / CELL_M), highestBuiltCellY + 6);
+  // headroom), or from maxY (converted to a cell index) if that's
+  // lower still — a typical build is nowhere near HEIGHT_MAX tall, so
+  // scanning down from there every single call wasted the overwhelming
+  // majority of its own iterations checking empty air above anything
+  // that actually exists, and scanning above maxY risks exactly the
+  // lintel bug described above.
+  let topCell = Math.min(Math.round((HEIGHT_MAX + 4) / CELL_M), highestBuiltCellY + 6);
+  if (maxY !== undefined) topCell = Math.min(topCell, Math.floor(maxY / CELL_M) + 1);
   for (let cy = topCell; cy >= 0; cy--) {
     if (occupancy.has(key(cx, cy, cz))) return (cy + 1) * CELL_M;
   }
@@ -5097,10 +5207,40 @@ function exploreGroundHeightAt(wx, wz) {
 // height through this same radius-aware version, everywhere it's used
 // for movement, keeps every decision agreeing with the others about
 // which surface the player is actually standing on.
-function exploreGroundHeightNear(wx, wz) {
-  const offsets = [[0, 0], [PLAYER_RADIUS_M, 0], [-PLAYER_RADIUS_M, 0], [0, PLAYER_RADIUS_M], [0, -PLAYER_RADIUS_M]];
-  let g = 0;
-  for (const [ox, oz] of offsets) g = Math.max(g, exploreGroundHeightAt(wx + ox, wz + oz));
+// The ground height that actually matters for movement/grounding
+// decisions — checked at the player's own centre point FIRST, then
+// only allows a nearby radius-offset sample to override that if it's
+// within ordinary step-climbing range (STEP_HEIGHT_M) of what the
+// centre itself already found. That distinction matters: standing
+// exactly at a stair's edge, where the centre point alone could flip
+// between two SIMILAR neighbouring heights from one frame to the next,
+// is what the radius-based check was originally added to fix — but
+// blindly taking the max across the whole radius went too far the
+// other way. A doorway gap only a little wider than the player's own
+// collision radius means that radius genuinely grazes the tall wall on
+// either side of the opening, and unconditionally trusting whichever
+// sample point read highest reported THAT wall's own full height as
+// "the ground right here", instantly snapping the player up to the
+// top of it while just walking through an ordinary doorway. Capping
+// how much a neighbouring sample is allowed to raise the reading over
+// the centre's own keeps the stair-edge fix intact (two adjacent
+// stair steps are, by definition, at most one step apart) while no
+// longer being fooled by something merely standing nearby that's far
+// taller than a single step.
+function exploreGroundHeightNear(wx, wz, footY) {
+  // The cap passed down to exploreGroundHeightAt: never look higher
+  // than one step's reach above the player's OWN current feet — a
+  // lintel or roof well above that is a ceiling to walk under, not a
+  // surface to treat as ground, however tall the structure it belongs
+  // to actually is.
+  const maxY = footY + STEP_HEIGHT_M + 0.05;
+  const centerGround = exploreGroundHeightAt(wx, wz, maxY);
+  const offsets = [[PLAYER_RADIUS_M, 0], [-PLAYER_RADIUS_M, 0], [0, PLAYER_RADIUS_M], [0, -PLAYER_RADIUS_M]];
+  let g = centerGround;
+  for (const [ox, oz] of offsets) {
+    const sampleGround = exploreGroundHeightAt(wx + ox, wz + oz, maxY);
+    if (sampleGround > g && (sampleGround - centerGround) <= STEP_HEIGHT_M) g = sampleGround;
+  }
   return g;
 }
 // Horizontal wall collision: samples a small cross of points around the
@@ -5125,11 +5265,69 @@ function isExploreBlockedAt(wx, wz, footY) {
 // on TOP of whatever's actually there instead of stopping dead. Returns
 // the resulting foot height on success (which may be higher than the
 // one passed in), or null if the move is blocked outright.
-function resolveExploreAxisMove(nx, nz, footY) {
+//
+// `axis` ('x' or 'z') is which direction is actually being moved along
+// for THIS call — ground height for the step-up check only samples the
+// player's own collision radius offsets ALONG that same axis, not
+// perpendicular to it. That distinction is what actually separates "a
+// real step directly in my path" from "a wall running alongside the
+// path I'm walking, e.g. the sides of a doorway cut into it": a
+// genuine step sits ahead of the player in their direction of travel,
+// so offsets along that same axis correctly find it; a wall the player
+// is merely passing BESIDE only shows up in the perpendicular axis's
+// offsets, which this deliberately never looks at.
+//
+// That alone still isn't the whole picture, though: a solid multi-
+// course wall's own OUTER EDGE is, geometrically, indistinguishable
+// from a real staircase — every course is exactly one step higher than
+// the last, same as a real step would be. Walking dead straight through
+// a doorway never touches that edge, but the joystick allows smooth,
+// gently ANGLED movement in a way a keyboard's four fixed directions
+// don't — nudging slightly sideways while easing through a narrow
+// opening can drift the player's own candidate position into the
+// adjacent wall's footprint course by course, each one individually
+// looking exactly like a perfectly ordinary single step to climb.
+//
+// This is bounded with a small "climbing budget", refilled gradually
+// over time rather than reset by how far the player has moved — an
+// earlier version tried gating this on horizontal progress instead,
+// but that had a serious flaw: REJECTING a step-up also rejects the
+// entire axis's move (see the null returns below), so a rejected step
+// froze the player's position outright, which meant they could never
+// "advance" far enough to satisfy that check either — a genuine
+// deadlock, stuck permanently at a real staircase's very first riser.
+// A budget that simply refills with elapsed time has no such trap: the
+// player might be paced or briefly held at a course boundary while
+// lingering against the same obstruction, but time keeps passing
+// regardless of whether they've moved, so it always eventually allows
+// the next step rather than getting stuck forever. Sized generously
+// enough that an entire ordinary staircase (see the climbing test
+// below, which covers 1.25m across 5 steps in a fraction of a second)
+// is never throttled at all, while a much taller wall being grazed
+// course by course for an extended time is.
+let climbBudgetHeight = STEP_HEIGHT_M * 8;
+let climbBudgetLastUpdate = -Infinity;
+const CLIMB_BUDGET_MAX_M = STEP_HEIGHT_M * 8;
+const CLIMB_BUDGET_REFILL_PER_S = STEP_HEIGHT_M * 4;
+function resolveExploreAxisMove(nx, nz, footY, axis) {
   if (!isExploreBlockedAt(nx, nz, footY)) return footY;
-  const destGround = exploreGroundHeightNear(nx, nz);
+  const maxY = footY + STEP_HEIGHT_M + 0.05; // never mistake a lintel/roof well above the player's own current feet for something to step onto — see exploreGroundHeightAt's own comment on exactly this
+  const centerGround = exploreGroundHeightAt(nx, nz, maxY);
+  let destGround = centerGround;
+  const offsets = axis === 'x' ? [[PLAYER_RADIUS_M, 0], [-PLAYER_RADIUS_M, 0]] : [[0, PLAYER_RADIUS_M], [0, -PLAYER_RADIUS_M]];
+  for (const [ox, oz] of offsets) {
+    const sampleGround = exploreGroundHeightAt(nx + ox, nz + oz, maxY);
+    if (sampleGround > destGround && (sampleGround - centerGround) <= STEP_HEIGHT_M) destGround = sampleGround;
+  }
   const rise = destGround - footY;
-  if (rise > 0 && rise <= STEP_HEIGHT_M && !isExploreBlockedAt(nx, nz, destGround)) return destGround;
+  if (rise > 0 && rise <= STEP_HEIGHT_M && !isExploreBlockedAt(nx, nz, destGround)) {
+    const dtSinceLast = Math.max(0, elapsedTime - climbBudgetLastUpdate);
+    climbBudgetHeight = Math.min(CLIMB_BUDGET_MAX_M, climbBudgetHeight + dtSinceLast * CLIMB_BUDGET_REFILL_PER_S);
+    climbBudgetLastUpdate = elapsedTime;
+    if (rise > climbBudgetHeight) return null; // climbed too much too recently — likely grazing a tall wall's edge for an extended stretch rather than a genuine, bounded staircase run
+    climbBudgetHeight -= rise;
+    return destGround;
+  }
   return null;
 }
 function setExploreMode(v) {
@@ -5140,15 +5338,18 @@ function setExploreMode(v) {
   btn.title = exploreMode ? 'Stop exploring' : 'Explore mode';
   btn.classList.toggle('active', exploreMode);
   updateActionBtnLabel(); // the round button becomes JUMP while exploring, and back to whatever the current build tool says otherwise
+  const legendVertical = document.getElementById('keyboardLegendVertical');
+  if (legendVertical) legendVertical.innerHTML = exploreMode ? '<span class="kbd">Space</span> Jump' : '<span class="kbd">Space</span> Up <span class="kbd">Shift</span> Down';
   if (exploreMode) {
     playerVelY = 0;
     exploreGrounded = false;
     jumpRequested = false;
+    climbBudgetHeight = CLIMB_BUDGET_MAX_M; climbBudgetLastUpdate = -Infinity; // start every fresh session with a full climbing budget, not whatever was left over from a previous one
     // If the player was flying somewhere below ground level (shouldn't
     // normally happen, but build mode has no floor collision at all),
     // snap them up onto solid ground immediately rather than leaving
     // them stuck inside a Briq the moment gravity takes over.
-    const ground = exploreGroundHeightNear(playerPos.x, playerPos.z);
+    const ground = exploreGroundHeightNear(playerPos.x, playerPos.z, playerPos.y - eyeHeight);
     if (playerPos.y - eyeHeight < ground) playerPos.y = ground + eyeHeight;
   } else {
     flyUp = false; flyDown = false;
@@ -7738,6 +7939,49 @@ function computeCopyPasteRestY(entries, dx, dz) {
 // stud geometry) — anything more mixed is left at the raw aim; the
 // overlap/lift logic above still applies regardless, this refinement
 // on top of it just doesn't additionally kick in.
+// Cache for the copy-paste preview's own (fairly expensive — it scales
+// with however many pieces are in the clipboard) validity/position
+// computation, keyed on the exact things that could actually change
+// its result. Without this, updateCopyAimAndGhost recomputed all of it
+// from scratch on literally every single animation frame, even when
+// the aim hadn't moved to a new cell at all between one frame and the
+// next — harmless for a small clipboard, but a genuine, noticeable
+// stutter once someone copies a large structure (hundreds of Briqs),
+// since EVERY frame was repeating that full-sized computation for no
+// reason. Invalidated explicitly wherever the clipboard's own content
+// or anchor mode can change (capture, rotate, cycling the anchor
+// toggle) — see the few `copyPreviewCache = null;` lines at each of
+// those call sites.
+let copyPreviewCache = null; // { key, anchor, restY, flags }
+// The per-piece validity check (computeEntryValidityFlags) is the most
+// expensive part of this — it scales with however many pieces are in
+// the clipboard, same as the rest, but unlike the position/height
+// computation it doesn't need to be perfectly up-to-the-frame to still
+// look right: colours flipping a fraction of a second later than the
+// ghost's own position moving is imperceptible during normal dragging,
+// while recomputing it on literally every cache miss (i.e. on every
+// frame the aim genuinely moves at all — the exact situation actively
+// lining up a large paste involves) is not. Throttled separately from
+// the position cache above it, so the ghost itself still follows the
+// cursor with zero lag every frame regardless.
+let copyPreviewColorCache = null; // { entries, flags, computedAt }
+const COPY_PREVIEW_COLOR_THROTTLE_MS = 150;
+function getCopyPreviewForAim(entries, rawX, rawZ) {
+  const key = `${rawX}_${rawZ}`;
+  if (copyPreviewCache && copyPreviewCache.key === key) return copyPreviewCache;
+  const anchor = resolveCopyPasteAnchor(entries, rawX, rawZ);
+  const restY = computeCopyPasteRestY(entries, anchor.x, anchor.z);
+  const now = Date.now();
+  let flags;
+  if (copyPreviewColorCache && copyPreviewColorCache.entries === entries && (now - copyPreviewColorCache.computedAt) < COPY_PREVIEW_COLOR_THROTTLE_MS) {
+    flags = copyPreviewColorCache.flags;
+  } else {
+    flags = computeEntryValidityFlags(entries, anchor.x, restY, anchor.z);
+    copyPreviewColorCache = { entries, flags, computedAt: now };
+  }
+  copyPreviewCache = { key, anchor, restY, flags };
+  return copyPreviewCache;
+}
 function resolveCopyPasteAnchor(entries, rawX, rawZ) {
   if (computeCopyPasteRestY(entries, rawX, rawZ) === 0) return { x: rawX, z: rawZ };
   const allPlainBricks = entries.every((e) => !e.isSlabBlock && !e.isRoofBlock);
@@ -7804,12 +8048,20 @@ function shiftCaptureEntry(e, dx, dy, dz) {
 // geometry+transform math exactly, just with a preview material and no
 // occupancy/collision side effects.
 function buildEntryGhostMesh(e) {
+  // Deliberately no castShadow/receiveShadow here (unlike every REAL
+  // brick mesh, which does set both) — these are translucent 50%-
+  // opacity preview overlays, not real geometry, so a cast shadow from
+  // one wouldn't even look physically sensible layered under a
+  // see-through ghost. It also isn't free: a large captured structure
+  // (a wall of a thousand-plus Briqs is a completely normal thing to
+  // copy) means a thousand-plus extra shadow-casters added to the
+  // shadow pass every single frame for a preview nobody's shadow needs
+  // to be correct for in the first place.
   if (e.isRoofBlock) {
     const t = computeRoofTransform(e.x0, e.x1, e.z0, e.z1, e.yLow, e.yHigh, e.slopeAxis);
     const mesh = new THREE.Mesh(getRoofBodyGeo(t.geoDimX, t.thickness, t.geoDimZ), copyPreviewMat);
     mesh.position.set(t.position.x, t.position.y, t.position.z);
     mesh.rotation.x = t.rotation.x; mesh.rotation.z = t.rotation.z;
-    mesh.castShadow = true; mesh.receiveShadow = true;
     return mesh;
   }
   if (e.isSlabBlock) {
@@ -7817,7 +8069,6 @@ function buildEntryGhostMesh(e) {
     const widthCells = e.x1 - e.x0, depthCells = e.z1 - e.z0;
     const mesh = new THREE.Mesh(getSlabBodyGeo(e.mainType, widthCells, depthCells), copyPreviewMat);
     mesh.position.set((e.x0 + e.x1) / 2 * CELL_M, (e.y + crossCells / 2) * CELL_M, (e.z0 + e.z1) / 2 * CELL_M);
-    mesh.castShadow = true; mesh.receiveShadow = true;
     return mesh;
   }
   const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
@@ -7826,7 +8077,6 @@ function buildEntryGhostMesh(e) {
   const c = brickCenterWorld(fp);
   mesh.position.set(c[0], c[1], c[2]);
   if (e.orientation === 'z') mesh.rotation.y = Math.PI / 2;
-  mesh.castShadow = true; mesh.receiveShadow = true;
   return mesh;
 }
 function clearClipboardPreview() {
@@ -7906,11 +8156,14 @@ function captureClipboard(x0, x1, z0, z1) {
   for (const e of entries) shiftCaptureEntry(e, -x0, 0, -z0);
   clipboard = { entries, w: x1 - x0, d: z1 - z0, minY, maxY };
   rebaseClipboardToTightBounds(); // corrects w/d/entries down to the ACTUAL captured footprint, not the (usually larger) marked rectangle
+  copyPreviewCache = null; copyPreviewColorCache = null; // a brand new clipboard — any cached preview from a previous one is meaningless now, even if the aim happens to land on the exact same cell as before
   buildClipboardPreview();
 }
 function clearClipboard() {
   clipboard = null;
   copyStart = null;
+  copyPreviewCache = null;
+  copyPreviewColorCache = null;
   clearClipboardPreview();
   updateBriqControlsVisibility();
 }
@@ -8024,6 +8277,7 @@ function rotateClipboard90() {
     else rotateBrickEntry90(e);
   }
   rebaseClipboardToTightBounds();
+  copyPreviewCache = null; copyPreviewColorCache = null; // the entries themselves just changed shape — a cached preview keyed only on aim position (or, for colours, only on the entries array reference — rotation mutates entries IN PLACE rather than replacing the array) would otherwise still match and wrongly get reused
   buildClipboardPreview();
 }
 // Reads the CURRENT aim (refreshed every frame by updateCopyAimAndGhost,
@@ -8086,8 +8340,7 @@ function updateCopyAimAndGhost() {
     clearCopyAreaHighlights(); // marking is over once a clipboard exists — nothing left to highlight as "about to be captured"
     if (clipboardPreviewGroup) {
       const a0 = copyPasteAnchor(cur);
-      const a = resolveCopyPasteAnchor(clipboard.entries, a0.x, a0.z);
-      const restY = computeCopyPasteRestY(clipboard.entries, a.x, a.z);
+      const { anchor: a, restY, flags } = getCopyPreviewForAim(clipboard.entries, a0.x, a0.z);
       clipboardPreviewGroup.position.set(a.x * CELL_M, restY * CELL_M, a.z * CELL_M);
       // Per-piece colour, not one verdict for the whole group — pasting
       // was never all-or-nothing (see pasteClipboardAt's own comment on
@@ -8096,7 +8349,6 @@ function updateCopyAimAndGhost() {
       // the SAME height (restY) the paste itself would actually use,
       // and in the SAME sequential order (see computeEntryValidityFlags'
       // own comment on why that specifically matters).
-      const flags = computeEntryValidityFlags(clipboard.entries, a.x, restY, a.z);
       clipboard.entries.forEach((e, i) => {
         const mesh = clipboardPreviewGroup.children[i];
         if (mesh) mesh.material = flags[i] ? copyPreviewMat : copyPreviewInvalidMat;
@@ -8729,9 +8981,9 @@ function animate() {
       const tryX = playerPos.x + dx;
       const tryZ = playerPos.z + dz;
       let stepped = false;
-      const resX = resolveExploreAxisMove(tryX, playerPos.z, footY);
+      const resX = resolveExploreAxisMove(tryX, playerPos.z, footY, 'x');
       if (resX !== null) { playerPos.x = tryX; if (resX !== footY) { footY = resX; stepped = true; } }
-      const resZ = resolveExploreAxisMove(playerPos.x, tryZ, footY);
+      const resZ = resolveExploreAxisMove(playerPos.x, tryZ, footY, 'z');
       if (resZ !== null) { playerPos.z = tryZ; if (resZ !== footY) { footY = resZ; stepped = true; } }
       playerPos.x = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.x));
       playerPos.z = Math.max(WORLD_MIN + 0.5, Math.min(WORLD_MAX - 0.5, playerPos.z));
@@ -8754,8 +9006,8 @@ function animate() {
       // flip between two different neighbouring heights from one frame
       // to the next, is exactly what caused an endless tiny up/down
       // bounce there before this used the same query everywhere.
-      const ground = exploreGroundHeightNear(playerPos.x, playerPos.z);
       const newFootY = playerPos.y - eyeHeight;
+      const ground = exploreGroundHeightNear(playerPos.x, playerPos.z, newFootY);
       if (newFootY <= ground + 0.02 && playerVelY <= 0) {
         exploreGrounded = true;
         playerVelY = 0;

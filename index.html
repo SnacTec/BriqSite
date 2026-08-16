@@ -1029,7 +1029,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v3.07</div>
+  <div id="versionLabel">v3.08</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -10440,7 +10440,7 @@ function autosaveGame() {
   slot.data = serializeState();
   writeSaveSlots(slots);
 }
-setInterval(autosaveGame, 20000);
+setInterval(autosaveGame, 10000);
 window.addEventListener('beforeunload', autosaveGame);
 
 function makeSlotRow(name, ts, opts) {

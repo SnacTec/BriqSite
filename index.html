@@ -1019,7 +1019,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v3.00</div>
+  <div id="versionLabel">v3.02</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -8637,6 +8637,21 @@ function computeCopyPasteRestY(entries, dx, dz) {
 // toggle) — see the few `copyPreviewCache = null;` lines at each of
 // those call sites.
 let copyPreviewCache = null; // { key, anchor, restY, flags }
+// The rest-height computation (computeCopyPasteRestY) is the single
+// most expensive part of this whole preview — for a large clipboard it
+// walks every entry's own full cell list, at every candidate lift
+// level, checking each one against the world's occupancy — and unlike
+// the colour computation just below, it was left completely
+// unthrottled: it reran in full on every single cache miss above (i.e.
+// on every frame the aim genuinely moved to a new cell at all), which
+// is the actual dominant cost behind the reported stutter once a large
+// structure gets copied, more so than the per-piece validity colouring
+// itself. Throttled here the same way, and for the same reason: the
+// ghost's own HEIGHT staying accurate to within ~150ms, rather than
+// the current frame exactly, is imperceptible during normal aiming,
+// while recomputing the full scan on literally every frame is not.
+let copyPreviewRestYCache = null; // { entries, restY, computedAt }
+const COPY_PREVIEW_RESTY_THROTTLE_MS = 150;
 // The per-piece validity check (computeEntryValidityFlags) is the most
 // expensive part of this — it scales with however many pieces are in
 // the clipboard, same as the rest, but unlike the position/height
@@ -8654,8 +8669,14 @@ function getCopyPreviewForAim(entries, rawX, rawZ) {
   const key = `${rawX}_${rawZ}`;
   if (copyPreviewCache && copyPreviewCache.key === key) return copyPreviewCache;
   const anchor = resolveCopyPasteAnchor(entries, rawX, rawZ);
-  const restY = computeCopyPasteRestY(entries, anchor.x, anchor.z);
   const now = Date.now();
+  let restY;
+  if (copyPreviewRestYCache && copyPreviewRestYCache.entries === entries && (now - copyPreviewRestYCache.computedAt) < COPY_PREVIEW_RESTY_THROTTLE_MS) {
+    restY = copyPreviewRestYCache.restY;
+  } else {
+    restY = computeCopyPasteRestY(entries, anchor.x, anchor.z);
+    copyPreviewRestYCache = { entries, restY, computedAt: now };
+  }
   let flags;
   if (copyPreviewColorCache && copyPreviewColorCache.entries === entries && (now - copyPreviewColorCache.computedAt) < COPY_PREVIEW_COLOR_THROTTLE_MS) {
     flags = copyPreviewColorCache.flags;
@@ -8851,7 +8872,7 @@ function captureClipboard(x0, x1, z0, z1) {
   for (const e of entries) shiftCaptureEntry(e, -x0, 0, -z0);
   clipboard = { entries, w: x1 - x0, d: z1 - z0, minY, maxY };
   rebaseClipboardToTightBounds(); // corrects w/d/entries down to the ACTUAL captured footprint, not the (usually larger) marked rectangle
-  copyPreviewCache = null; copyPreviewColorCache = null; // a brand new clipboard — any cached preview from a previous one is meaningless now, even if the aim happens to land on the exact same cell as before
+  copyPreviewCache = null; copyPreviewColorCache = null; copyPreviewRestYCache = null; // a brand new clipboard — any cached preview from a previous one is meaningless now, even if the aim happens to land on the exact same cell as before
   buildClipboardPreview();
 }
 function clearClipboard() {
@@ -8859,6 +8880,7 @@ function clearClipboard() {
   copyStart = null;
   copyPreviewCache = null;
   copyPreviewColorCache = null;
+  copyPreviewRestYCache = null;
   clearClipboardPreview();
   updateBriqControlsVisibility();
 }
@@ -8871,24 +8893,34 @@ function clearClipboard() {
 // together in one step.
 function pasteClipboardAt(tx, tz) {
   if (!clipboard) return 0;
-  const restY = computeCopyPasteRestY(clipboard.entries, tx, tz);
+  // Captured now, not read live later inside the redo closure below —
+  // `clipboard` is a single shared, mutable variable, and the person
+  // could easily make an entirely DIFFERENT copy selection before ever
+  // coming back to undo/redo THIS specific paste (more likely the
+  // longer a big build takes, which is exactly why this was more
+  // noticeable on larger structures than small ones). Redoing this
+  // exact paste must always reproduce THESE entries, never whatever
+  // happens to be in the clipboard by the time redo actually runs.
+  const entries = clipboard.entries;
+  const restY = computeCopyPasteRestY(entries, tx, tz);
   const placedIds = [];
-  for (const e of clipboard.entries) {
+  for (const e of entries) {
     const id = pasteEntryAt(e, tx, restY, tz);
     if (id !== null && id !== false) placedIds.push(id);
   }
   if (placedIds.length > 0) {
-    // A redo re-pastes the SAME clipboard at the SAME spot, which
-    // creates a fresh batch of ids each time (never the same ones
-    // twice) — this shared "state" object is what lets a SUBSEQUENT
-    // undo keep removing whichever ids are actually current, across
-    // as many undo/redo cycles as the person wants to bounce through.
+    // A redo re-pastes the SAME captured entries at the SAME spot,
+    // which creates a fresh batch of ids each time (never the same
+    // ones twice) — this shared "state" object is what lets a
+    // SUBSEQUENT undo keep removing whichever ids are actually current,
+    // across as many undo/redo cycles as the person wants to bounce
+    // through.
     const state = { ids: placedIds };
     pushUndo(
       () => { for (const id of state.ids) removeBrickById(id); },
       () => {
         const newIds = [];
-        for (const e of clipboard.entries) {
+        for (const e of entries) {
           const id = pasteEntryAt(e, tx, restY, tz);
           if (id !== null && id !== false) newIds.push(id);
         }
@@ -8989,7 +9021,7 @@ function rotateClipboard90() {
     else rotateBrickEntry90(e);
   }
   rebaseClipboardToTightBounds();
-  copyPreviewCache = null; copyPreviewColorCache = null; // the entries themselves just changed shape — a cached preview keyed only on aim position (or, for colours, only on the entries array reference — rotation mutates entries IN PLACE rather than replacing the array) would otherwise still match and wrongly get reused
+  copyPreviewCache = null; copyPreviewColorCache = null; copyPreviewRestYCache = null; // the entries themselves just changed shape — a cached preview keyed only on aim position (or, for colours/height, only on the entries array reference — rotation mutates entries IN PLACE rather than replacing the array) would otherwise still match and wrongly get reused
   buildClipboardPreview();
 }
 // Reads the CURRENT aim (refreshed every frame by updateCopyAimAndGhost,

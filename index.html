@@ -802,7 +802,7 @@ try {
     background:rgba(0,0,0,.22); border:1px solid rgba(201,138,75,.25); border-radius:8px; cursor:pointer;
   }
   .slot-row:hover, .slot-row:active{border-color:var(--oak);}
-  .slot-row.autosave{border-color:rgba(143,199,157,.5);}
+  .slot-row.current{border-color:rgba(143,199,157,.6); background:rgba(143,199,157,.08);}
   .slot-row .slot-info{flex:1; min-width:0;}
   .slot-row .slot-name{font-size:13px; color:var(--parchment); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .slot-row .slot-date{font-size:10px; color:var(--parchment-dim); margin-top:1px;}
@@ -1029,7 +1029,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v3.06</div>
+  <div id="versionLabel">v3.07</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1465,8 +1465,8 @@ try {
   <div class="modal-bg" id="saveSlotModal" style="display:none;">
     <div class="modal">
       <div class="modal-scroll">
-        <h2>💾 Save Game</h2>
-        <div class="sub">Save your build in this browser, or overwrite an existing save.</div>
+        <h2 id="saveSlotTitle">💾 Save Game</h2>
+        <div class="sub" id="saveSlotSub">Save your build in this browser, or overwrite an existing save.</div>
         <input type="text" id="saveNameInput" placeholder="Save name" maxlength="40">
         <div class="slot-list" id="saveSlotList"></div>
       </div>
@@ -1484,8 +1484,9 @@ try {
         <div class="sub">Choose a save to load. This replaces your current build.</div>
         <div class="slot-list" id="loadSlotList"></div>
       </div>
-      <div class="modal-footer">
-        <button class="cta ghost" id="loadSlotCancelBtn" style="width:100%;">Cancel</button>
+      <div class="modal-footer row">
+        <button class="cta ghost" id="loadSlotCancelBtn">Cancel</button>
+        <button class="cta" id="loadSlotNewGameBtn">🆕 New Game</button>
       </div>
     </div>
   </div>
@@ -10079,6 +10080,7 @@ function chooseTeam(team) {
   markTeamCardChosen();
   document.getElementById('introModal').style.display = 'none';
   if (touchUI && !isIOS) toggleFullscreen(); // best-effort, ignored where unsupported
+  proceedPastTeamSelection();
   // Optional hook for the separate Firebase stats module (see the
   // dedicated <script type="module"> block near the end of the file) —
   // deliberately just a plain global function call, not an import,
@@ -10088,6 +10090,27 @@ function chooseTeam(team) {
   // configured yet) — that module checks FIREBASE_CONSENT_KEY on its
   // own before ever counting anything.
   window.__briqStats && window.__briqStats.onTeamChosen && window.__briqStats.onTeamChosen(team);
+}
+// Decides what the person sees right after choosing a team: a migrated
+// pre-existing autosave drops them straight back into it (see
+// migrateOldAutosaveIfNeeded's own comment for why); otherwise, any
+// existing named saves mean there's a real choice to make (which one,
+// or start fresh instead), so the Load menu — now also offering "New
+// Game" — takes over from here; only a genuinely first-ever visit,
+// with nothing saved at all yet, skips straight into a brand new game
+// with zero friction.
+function proceedPastTeamSelection() {
+  const migratedId = migrateOldAutosaveIfNeeded();
+  if (migratedId) {
+    const slot = readSaveSlots().find(s => s.id === migratedId);
+    if (slot) applyLoadedData(slot.data);
+    return;
+  }
+  if (readSaveSlots().length === 0) {
+    startNewGameInSlot('My World');
+    return;
+  }
+  openLoadModal();
 }
 markTeamCardChosen();
 document.getElementById('teamVkeBtn').addEventListener('click', () => chooseTeam('vke'));
@@ -10302,7 +10325,17 @@ function loadGame(jsonText) {
 
 /* ---- In-browser save slots (multiple named saves + autosave) ---- */
 const SAVE_SLOTS_KEY = 'briqsite_save_slots_v1';
-const AUTOSAVE_KEY = 'briqsite_autosave_v1';
+const AUTOSAVE_KEY = 'briqsite_autosave_v1'; // legacy — retired in favour of autosaving into a NAMED slot, kept only so migrateOldAutosaveIfNeeded() can still find and absorb anyone's pre-existing one
+const CURRENT_SLOT_KEY = 'briqsite_current_slot_v1'; // which named slot autosave now targets
+function getCurrentSlotId() {
+  try { return localStorage.getItem(CURRENT_SLOT_KEY); } catch (e) { return null; }
+}
+function setCurrentSlotId(id) {
+  try {
+    if (id === null || id === undefined) localStorage.removeItem(CURRENT_SLOT_KEY);
+    else localStorage.setItem(CURRENT_SLOT_KEY, id);
+  } catch (e) { /* best-effort */ }
+}
 
 function readSaveSlots() {
   try {
@@ -10335,15 +10368,53 @@ function saveNamedSlot(name) {
   const slots = readSaveSlots();
   const existing = slots.find(s => s.name === name);
   const state = serializeState();
+  let id;
   if (existing) {
     existing.ts = Date.now();
     existing.data = state;
+    id = existing.id;
   } else {
-    slots.push({ id: genSlotId(), name, ts: Date.now(), data: state });
+    id = genSlotId();
+    slots.push({ id, name, ts: Date.now(), data: state });
   }
   writeSaveSlots(slots);
+  setCurrentSlotId(id); // explicitly saving into a slot makes it the one autosave continues into from here on
   unlockAchievement('first_save');
   return slots;
+}
+// Clears the current build and starts a fresh, freshly-named slot,
+// immediately marked as the active one — autosave has somewhere
+// sensible to continue writing into from the very first moment of a
+// new game, the same as loading an existing slot already gives it.
+function startNewGameInSlot(name) {
+  resetGame();
+  const slots = readSaveSlots();
+  const finalName = (name && name.trim()) ? name.trim() : ('Save ' + (slots.length + 1));
+  const id = genSlotId();
+  slots.push({ id, name: finalName, ts: Date.now(), data: serializeState() });
+  writeSaveSlots(slots);
+  setCurrentSlotId(id);
+  return id;
+}
+// One-time migration: someone who already had the OLD single-slot
+// autosave (from before autosave was tracked per named slot) gets it
+// folded into a proper named slot on their very next visit — detected
+// by the NEW current-slot key simply not existing yet. Returns the new
+// slot's id if a migration happened, so the caller can drop the person
+// straight back into it rather than showing a menu: as far as they're
+// concerned they're just continuing where they left off, exactly what
+// autosave always meant before this change.
+function migrateOldAutosaveIfNeeded() {
+  if (getCurrentSlotId()) return null;
+  const old = readAutosave();
+  if (!old) return null;
+  const slots = readSaveSlots();
+  const id = genSlotId();
+  slots.push({ id, name: 'Continued Game', ts: old.ts || Date.now(), data: old.data });
+  writeSaveSlots(slots);
+  setCurrentSlotId(id);
+  try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) { /* best-effort */ }
+  return id;
 }
 function deleteSaveSlot(id) {
   const slots = readSaveSlots().filter(s => s.id !== id);
@@ -10352,23 +10423,34 @@ function deleteSaveSlot(id) {
 }
 // Time-based autosave: skipped while the build is empty, so an empty
 // scene visited briefly right after Reset can never clobber a real
-// autosave from an earlier session.
+// save from an earlier session. Writes into whichever NAMED slot is
+// currently active (set on load, on explicit save, or on starting a
+// new game) rather than a separate dedicated autosave slot — so
+// resuming later, from anywhere, always means picking that one named
+// save, not hunting for a second "Autosave" entry that might be either
+// newer or older than it depending on what was touched last.
 function autosaveGame() {
   if (!hasAnyBuild()) return;
-  try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ ts: Date.now(), data: serializeState() })); }
-  catch (e) { /* autosave is a convenience, not a promise — fail silently */ }
+  const id = getCurrentSlotId();
+  if (!id) return; // no active slot to autosave into — shouldn't normally happen once the startup flow always establishes one, but there's nothing safe to do without it
+  const slots = readSaveSlots();
+  const slot = slots.find(s => s.id === id);
+  if (!slot) return; // the active slot no longer exists (deleting it is prevented from the Load menu while it's active, so this is only a defensive fallback)
+  slot.ts = Date.now();
+  slot.data = serializeState();
+  writeSaveSlots(slots);
 }
 setInterval(autosaveGame, 20000);
 window.addEventListener('beforeunload', autosaveGame);
 
 function makeSlotRow(name, ts, opts) {
   const row = document.createElement('div');
-  row.className = 'slot-row' + (opts.extraClass ? ' ' + opts.extraClass : '');
+  row.className = 'slot-row' + (opts.extraClass ? ' ' + opts.extraClass : '') + (opts.isCurrent ? ' current' : '');
   const info = document.createElement('div');
   info.className = 'slot-info';
   const nameEl = document.createElement('div');
   nameEl.className = 'slot-name';
-  nameEl.textContent = name;
+  nameEl.textContent = name + (opts.isCurrent ? ' ▶ (current)' : '');
   const dateEl = document.createElement('div');
   dateEl.className = 'slot-date';
   dateEl.textContent = formatSlotDate(ts);
@@ -10438,9 +10520,29 @@ function renderSaveModal() {
     }));
   }
 }
+let saveModalMode = 'save'; // 'save' (default: save/overwrite into a slot) | 'newGame' (name a fresh slot and start clean)
 function openSaveModal() {
+  saveModalMode = 'save';
+  document.getElementById('saveSlotTitle').textContent = '\ud83d\udcbe Save Game';
+  document.getElementById('saveSlotSub').textContent = 'Save your build in this browser, or overwrite an existing save.';
+  document.getElementById('saveSlotConfirmBtn').textContent = 'Save';
+  document.getElementById('saveSlotList').style.display = '';
   document.getElementById('saveNameInput').value = 'Save ' + (readSaveSlots().length + 1);
   renderSaveModal();
+  document.getElementById('saveSlotModal').style.display = 'flex';
+}
+// Reuses the same naming modal for "start a new game" — the gesture is
+// the same (type a name, confirm) even though what happens next is
+// different (a fresh, empty slot rather than saving the current build)
+// — the existing-slots list is hidden here since there's nothing to
+// browse or overwrite when starting clean, only a name to pick.
+function openNewGameModal() {
+  saveModalMode = 'newGame';
+  document.getElementById('saveSlotTitle').textContent = '\ud83c\udd95 Start New Game';
+  document.getElementById('saveSlotSub').textContent = 'Name your new save. This clears the current build and starts fresh.';
+  document.getElementById('saveSlotConfirmBtn').textContent = 'Start';
+  document.getElementById('saveSlotList').style.display = 'none';
+  document.getElementById('saveNameInput').value = 'Save ' + (readSaveSlots().length + 1);
   document.getElementById('saveSlotModal').style.display = 'flex';
 }
 function closeSaveModal() { document.getElementById('saveSlotModal').style.display = 'none'; }
@@ -10448,33 +10550,29 @@ function closeSaveModal() { document.getElementById('saveSlotModal').style.displ
 function renderLoadModal() {
   const list = document.getElementById('loadSlotList');
   list.innerHTML = '';
-  const autosave = readAutosave();
   const slots = readSaveSlots().slice().sort((a, b) => b.ts - a.ts);
-  if (!autosave && slots.length === 0) {
+  if (slots.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'slot-empty';
     empty.textContent = 'No saved games in this browser yet.';
     list.appendChild(empty);
     return;
   }
-  if (autosave) {
-    list.appendChild(makeSlotRow('🕐 Autosave', autosave.ts, {
-      extraClass: 'autosave',
-      onClick: () => {
-        const doLoad = () => { applyLoadedData(autosave.data); closeLoadModal(); };
-        if (hasAnyBuild()) showConfirm('Load Autosave?', 'Load Autosave? This replaces your current build.', doLoad);
-        else doLoad();
-      },
-    }));
-  }
+  const currentId = getCurrentSlotId();
   for (const slot of slots) {
+    const isCurrent = slot.id === currentId;
     list.appendChild(makeSlotRow(slot.name, slot.ts, {
+      isCurrent,
       onClick: () => {
-        const doLoad = () => { applyLoadedData(slot.data); closeLoadModal(); };
+        const doLoad = () => { setCurrentSlotId(slot.id); applyLoadedData(slot.data); closeLoadModal(); };
         if (hasAnyBuild()) showConfirm('Load save?', `Load "${slot.name}"? This replaces your current build.`, doLoad);
         else doLoad();
       },
-      onDelete: () => {
+      // The currently active slot can't be deleted from here — it's the
+      // one autosave is continuously writing into; removing it out from
+      // under an ongoing session would leave autosave with nowhere
+      // sensible to go until the next explicit save or load.
+      onDelete: isCurrent ? null : () => {
         showConfirm('Delete save?', `Delete save "${slot.name}"?`, () => {
           deleteSaveSlot(slot.id);
           renderLoadModal();
@@ -10498,12 +10596,18 @@ document.getElementById('saveSlotConfirmBtn').addEventListener('click', () => {
   const input = document.getElementById('saveNameInput');
   let name = input.value.trim();
   if (!name) name = 'Save ' + (readSaveSlots().length + 1);
-  saveNamedSlot(name);
+  if (saveModalMode === 'newGame') startNewGameInSlot(name);
+  else saveNamedSlot(name);
   closeSaveModal();
 });
 
 document.getElementById('loadBtn').addEventListener('click', openLoadModal);
 document.getElementById('loadSlotCancelBtn').addEventListener('click', closeLoadModal);
+document.getElementById('loadSlotNewGameBtn').addEventListener('click', () => {
+  const doOpen = () => { closeLoadModal(); openNewGameModal(); };
+  if (hasAnyBuild()) showConfirm('Start new game?', 'Start a new game? This clears your current build (it stays saved under its own name).', doOpen);
+  else doOpen();
+});
 document.getElementById('loadSlotModal').addEventListener('click', (e) => {
   if (e.target && e.target.id === 'loadSlotModal') closeLoadModal();
 });

@@ -1019,7 +1019,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v3.02</div>
+  <div id="versionLabel">v3.03</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -10502,9 +10502,52 @@ function captureScreenshotBlob() {
   return new Promise((resolve) => {
     withGhostsHidden(() => {
       renderer.render(scene, camera); // re-render now, with ghosts hidden, before reading pixels
-      renderer.domElement.toBlob((blob) => resolve(blob), 'image/png');
+      // Composited onto a fresh 2D canvas rather than reading the WebGL
+      // canvas directly — this is what lets a small watermark be drawn
+      // on top of the final image, without touching the live 3D scene
+      // (or its own canvas) at all.
+      const srcCanvas = renderer.domElement;
+      const outCanvas = document.createElement('canvas');
+      outCanvas.width = srcCanvas.width;
+      outCanvas.height = srcCanvas.height;
+      const ctx = outCanvas.getContext('2d');
+      ctx.drawImage(srcCanvas, 0, 0);
+      drawScreenshotWatermark(ctx, outCanvas.width, outCanvas.height);
+      outCanvas.toBlob((blob) => resolve(blob), 'image/png');
     });
   });
+}
+// A small, unobtrusive "BriqSite" mark in the bottom-right corner of
+// every shared/downloaded screenshot — sized relative to the actual
+// image resolution (not a fixed pixel count) so it stays proportionally
+// the same small corner note whether the shot came from a phone or a
+// large desktop window, rather than looming huge on a small screenshot
+// or vanishing on a big one. A soft dark pill behind the text keeps it
+// legible over any background the screenshot happens to have (bright
+// sky, dark interior, a light-coloured wall right behind it, ...)
+// without needing a hard outline that would look more like a logo
+// stamp than a quiet corner credit.
+function drawScreenshotWatermark(ctx, w, h) {
+  const fontSize = Math.max(14, Math.round(h * 0.024));
+  const paddingX = fontSize * 0.7, paddingY = fontSize * 0.45;
+  const marginX = Math.round(w * 0.02), marginY = Math.round(h * 0.02);
+  ctx.font = `700 ${fontSize}px 'Fraunces', serif`;
+  ctx.textBaseline = 'middle';
+  const textW = ctx.measureText('BriqSite').width;
+  const pillW = textW + paddingX * 2, pillH = fontSize + paddingY * 2;
+  const pillX = w - marginX - pillW, pillY = h - marginY - pillH;
+  const r = pillH / 2;
+  ctx.fillStyle = 'rgba(32,24,15,0.55)';
+  ctx.beginPath();
+  ctx.moveTo(pillX + r, pillY);
+  ctx.arcTo(pillX + pillW, pillY, pillX + pillW, pillY + pillH, r);
+  ctx.arcTo(pillX + pillW, pillY + pillH, pillX, pillY + pillH, r);
+  ctx.arcTo(pillX, pillY + pillH, pillX, pillY, r);
+  ctx.arcTo(pillX, pillY, pillX + pillW, pillY, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#f3e8d2';
+  ctx.fillText('BriqSite', pillX + paddingX, pillY + pillH / 2 + fontSize * 0.04);
 }
 async function shareScreenshot() {
   const blob = await captureScreenshotBlob();

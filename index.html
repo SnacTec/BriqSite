@@ -171,7 +171,7 @@ try {
   /* ---------- Top-right, right-to-left: Menu, Info, Fullscreen, Undo ---------- */
   #topRightRow{
     position:absolute; top:calc(12px + env(safe-area-inset-top)); right:12px; z-index:15;
-    display:flex; align-items:center; gap:6px;
+    display:flex; align-items:flex-start; gap:6px;
   }
   #undoBtn, #redoBtn, #achievementsBtn, #shareBtn, #fullscreenBtn, #infoBtn, #menuBtn{
     font-size:18px; font-weight:700;
@@ -179,6 +179,11 @@ try {
     border-radius:9px; width:38px; height:38px; cursor:pointer; box-shadow:var(--shadow);
     display:flex; align-items:center; justify-content:center; flex-shrink:0;
   }
+  /* Stacks the Share button directly under the menu button (instead of
+     one more icon in the already-crowded horizontal row) — trims the
+     row down by one slot without hiding or moving Share anywhere less
+     discoverable, since it's still right where the menu itself is. */
+  #menuShareStack{display:flex; flex-direction:column; gap:6px; flex-shrink:0;}
   #infoBtn{font-family:'Fraunces', serif; font-style:italic; font-weight:900;}
   #infoPanel{
     position:absolute; top:calc(56px + env(safe-area-inset-top)); right:12px; z-index:15;
@@ -1019,7 +1024,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v3.03</div>
+  <div id="versionLabel">v3.05</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1076,10 +1081,12 @@ try {
     <button id="undoBtn" title="Undo last action">↩</button>
     <button id="redoBtn" title="Redo last undone action">↪</button>
     <button id="achievementsBtn" title="Achievements">🏆</button>
-    <button id="shareBtn" title="Share a screenshot">📷</button>
     <button id="fullscreenBtn" title="Fullscreen">⛶</button>
     <button id="infoBtn" title="Info">ℹ</button>
-    <button id="menuBtn" title="Menu">☰</button>
+    <div id="menuShareStack">
+      <button id="menuBtn" title="Menu">☰</button>
+      <button id="shareBtn" title="Share a screenshot">📷</button>
+    </div>
   </div>
   <div class="panel" id="infoPanel">
     <div class="group-label">Follow us on LinkedIn</div>

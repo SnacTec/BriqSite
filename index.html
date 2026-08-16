@@ -83,6 +83,36 @@ try {
      for this one setting.
   */
   .ui-scalable{transform: scale(var(--ui-scale, 1));}
+  /* Per-element overrides below: the shared rule above scales from each
+     element's own CENTRE by default, which is wrong for anything
+     anchored near a screen edge — growing a top-left panel from its own
+     centre pushes its LEFT edge further left (off-screen), not further
+     into the screen. Each override below instead anchors the scale
+     to whichever edge(s) that element is actually pinned to (matching
+     its own left/right/top/bottom CSS), so scaling up always grows
+     INTO the visible screen, never off of it. A few elements below also
+     already had their own transform (a translate, for their own
+     centring) BEFORE this feature existed — since a CSS transform
+     declaration is replaced wholesale by a later, more specific one
+     rather than merged, those need the translate and the scale
+     explicitly combined into one value here, or the id-level rule
+     elsewhere would simply win outright and this scale would silently
+     never have applied to them at all.
+  */
+  #leftControlCluster.ui-scalable{transform-origin:left center; transform:translateY(-50%) scale(var(--ui-scale, 1));}
+  #topLeftRow.ui-scalable, #typeMenuPanel.ui-scalable, #colorPanel.ui-scalable{transform-origin:left top;}
+  /* These two dropdowns sit at a fixed distance below #topLeftRow,
+     tuned to clear its DEFAULT (unscaled) height — as that row grows
+     taller with the UI size slider, its own bottom edge would extend
+     further down than this fixed gap accounts for, so the gap itself
+     needs to grow by the same factor to keep clearing it. */
+  #typeMenuPanel.ui-scalable{top:calc(56px * var(--ui-scale, 1) + env(safe-area-inset-top));}
+  #colorPanel.ui-scalable{top:calc(56px * var(--ui-scale, 1) + env(safe-area-inset-top));}
+  #topRightRow.ui-scalable{transform-origin:right top;}
+  #dock.ui-scalable{transform-origin:left bottom;}
+  #rotateBtn.ui-scalable, #copyAnchorBtn.ui-scalable, #actionBtn.ui-scalable, #keyboardLegend.ui-scalable{transform-origin:right bottom;}
+  #aimHint.ui-scalable, #measureResult.ui-scalable{transform-origin:center bottom; transform:translateX(-50%) scale(var(--ui-scale, 1));}
+  #levelHud.ui-scalable, #landscapeFsHint.ui-scalable{transform-origin:center top; transform:translateX(-50%) scale(var(--ui-scale, 1));}
 
   h1,h2,h3,.display{font-family:'Fraunces', serif;}
 
@@ -525,7 +555,20 @@ try {
     transform:translateZ(0); backface-visibility:hidden; -webkit-backface-visibility:hidden;
   }
   #actionBtn.remove{background:radial-gradient(circle at 35% 30%, var(--rust-light), var(--rust) 65%, #6f2c1c);}
-  #actionBtn:active{transform:translateZ(0) scale(.92);}
+  /* Needs its OWN combined transform declaration, not just the shared
+     .ui-scalable rule — #actionBtn's own base rule above already sets
+     transform:translateZ(0) (for GPU-composited anti-aliasing, an ID
+     selector), which otherwise silently wins over the plain .ui-
+     scalable class rule regardless of source order (an ID always beats
+     a class in specificity), discarding the scale entirely in the
+     resting state — exactly the bug this fixes, matching how :active
+     right below already had to do the same thing for the SAME reason.
+  */
+  #actionBtn.ui-scalable{
+    right:calc(32px * var(--ui-scale, 1)); bottom:calc(56px * var(--ui-scale, 1) + env(safe-area-inset-bottom));
+    transform:translateZ(0) scale(var(--ui-scale, 1));
+  }
+  #actionBtn.ui-scalable:active{transform:translateZ(0) scale(calc(var(--ui-scale, 1) * 0.92));}
 
   /* The "hold to arm rapid removal" ring: a thin coloured arc that grows
      clockwise from 12 o'clock around the button as the player holds
@@ -558,7 +601,11 @@ try {
     cursor:pointer;
     transform:translateZ(0); backface-visibility:hidden; -webkit-backface-visibility:hidden;
   }
-  #rotateBtn:active{transform:translateZ(0) scale(.92);}
+  #rotateBtn.ui-scalable{
+    right:calc(90px * var(--ui-scale, 1)); bottom:calc(112px * var(--ui-scale, 1) + env(safe-area-inset-bottom));
+    transform:translateZ(0) scale(var(--ui-scale, 1));
+  }
+  #rotateBtn.ui-scalable:active{transform:translateZ(0) scale(calc(var(--ui-scale, 1) * 0.92));}
 
   /* Sits to the lower-left of the main action button (rotateBtn sits
      above-left of it instead) — a distinct, secondary position so the
@@ -577,7 +624,11 @@ try {
     cursor:pointer;
     transform:translateZ(0); backface-visibility:hidden; -webkit-backface-visibility:hidden;
   }
-  #copyAnchorBtn:active{transform:translateZ(0) scale(.92);}
+  #copyAnchorBtn.ui-scalable{
+    right:calc(98px * var(--ui-scale, 1)); bottom:calc(30px * var(--ui-scale, 1) + env(safe-area-inset-bottom));
+    transform:translateZ(0) scale(var(--ui-scale, 1));
+  }
+  #copyAnchorBtn.ui-scalable:active{transform:translateZ(0) scale(calc(var(--ui-scale, 1) * 0.92));}
 
   #aimHint{
     position:absolute; left:50%; bottom:calc(96px + env(safe-area-inset-bottom));
@@ -601,7 +652,7 @@ try {
 
   /* ---------- Mobile move joystick + fly buttons: one centred cluster ---------- */
   #leftControlCluster{
-    position:absolute; left:22px; top:50%; transform:translateY(-50%);
+    position:absolute; left:22px; top:var(--joystick-vpos, 50%); transform:translateY(-50%);
     display:none; z-index:12;
   }
   #joyBase{
@@ -968,7 +1019,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v2.29</div>
+  <div id="versionLabel">v2.34</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -977,8 +1028,8 @@ try {
        than dimming the whole screen — only the specific buttons that
        aren't relevant right now look inactive; the 3D view itself
        always stays completely clear. -->
-  <div id="tutorialHand" class="ui-scalable" style="display:none;"><span id="tutorialHandGlyph">👇</span></div>
-  <div id="tutorialHint" class="ui-scalable" style="display:none;">
+  <div id="tutorialHand" style="display:none;"><span id="tutorialHandGlyph">👇</span></div>
+  <div id="tutorialHint" style="display:none;">
     <span id="tutorialHintText"></span>
     <button id="tutorialNextBtn" style="display:none;">Next</button>
     <button id="tutorialSkipBtn">Skip</button>
@@ -1280,6 +1331,10 @@ try {
           <input type="range" id="uiScaleSlider" min="80" max="160" value="100" step="5">
         </div>
         <div class="settings-row">
+          <span class="settings-label">Joystick height <small>(50% = phone default)</small></span>
+          <input type="range" id="joystickVposSlider" min="30" max="85" value="50" step="5">
+        </div>
+        <div class="settings-row">
           <span class="settings-label">Play area size <small id="worldRadiusLabel"></small></span>
           <input type="range" id="worldRadiusSlider" min="12" max="300" value="18" step="1">
         </div>
@@ -1378,7 +1433,7 @@ try {
     </div>
   </div>
 
-  <div id="achievementToast" class="ui-scalable" style="display:none;">
+  <div id="achievementToast" style="display:none;">
     <span id="achievementToastIcon"></span>
     <div>
       <div class="sub" style="margin:0; color:var(--oak-light);">Achievement unlocked!</div>
@@ -5849,9 +5904,21 @@ canvas.addEventListener('pointermove', (e) => {
    different. Deliberately untouched by any of this: touch/smartphone
    controls, which never used pointer lock or the mouse at all. */
 let rightMouseDown = false;
-canvas.addEventListener('contextmenu', (e) => {
-  if (mode === 'fp' && !touchUI) e.preventDefault(); // the right button is "look", not a context menu, in this mode
-});
+// Suppresses the BROWSER's own native context menu everywhere in the
+// game, unconditionally — not just while a right-drag is actively
+// being used for look control. Nothing in this game ever needs that
+// native menu to appear (no text to copy, no image to save), so there
+// was never a legitimate reason to let it through in the first place;
+// the previous, narrower version (only during mode==='fp' && !touchUI)
+// left it wide open the rest of the time. That mattered more than it
+// looked: a touch-capable Windows PC very often gets classified as
+// touchUI (having a touchscreen at all is usually enough), and Windows
+// itself turns a plain long-press into a synthesized right-click/
+// contextmenu event completely independently of whether an actual
+// mouse is even involved — so a normal, ordinary touch interaction
+// (not attempting any kind of right-click at all) could still pop the
+// browser's own menu up over the game and interrupt it.
+document.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 canvas.addEventListener('mousedown', (e) => {
   if (e.button === 2 && mode === 'fp' && !touchUI) rightMouseDown = true;
 });
@@ -7979,6 +8046,19 @@ function setUiScale(v) {
   document.documentElement.style.setProperty('--ui-scale', v);
   try { localStorage.setItem(UI_SCALE_KEY, v); } catch (e) { /* best-effort */ }
 }
+const JOYSTICK_VPOS_KEY = 'briqsite_joystick_vpos_v1';
+let joystickVpos = 50; // percent from the top of the screen — the movement joystick's own vertical CENTRE point
+// 50% (screen middle) was the comfortable default on a phone held
+// one-handed (see the settings row's own label) — a tablet, typically
+// held two-handed with the thumb resting naturally lower down, may
+// want the whole cluster moved further down instead. Kept separate
+// from the general UI size slider above since this is about WHERE the
+// joystick sits, not how big it (or anything else) is.
+function setJoystickVpos(v) {
+  joystickVpos = v;
+  document.documentElement.style.setProperty('--joystick-vpos', v + '%');
+  try { localStorage.setItem(JOYSTICK_VPOS_KEY, v); } catch (e) { /* best-effort */ }
+}
 function setLookSensitivity(v) { lookSensitivity = v; }
 function setCameraFov(v) {
   camera.fov = v;
@@ -8102,6 +8182,9 @@ document.getElementById('fovSlider').addEventListener('input', (e) => {
 document.getElementById('uiScaleSlider').addEventListener('input', (e) => {
   setUiScale(Number(e.target.value) / 100);
 });
+document.getElementById('joystickVposSlider').addEventListener('input', (e) => {
+  setJoystickVpos(Number(e.target.value));
+});
 // Restore whatever UI size was last chosen, same pattern as the world
 // radius slider just below — falls back to 100% (unchanged from
 // today) if nothing was ever saved.
@@ -8111,6 +8194,13 @@ document.getElementById('uiScaleSlider').addEventListener('input', (e) => {
   const v = saved !== null ? Number(saved) : 1;
   setUiScale(v);
   document.getElementById('uiScaleSlider').value = Math.round(v * 100);
+})();
+(function restoreJoystickVpos() {
+  let saved = null;
+  try { saved = localStorage.getItem(JOYSTICK_VPOS_KEY); } catch (e) { /* best-effort */ }
+  const v = saved !== null ? Number(saved) : 50;
+  setJoystickVpos(v);
+  document.getElementById('joystickVposSlider').value = v;
 })();
 document.getElementById('worldRadiusSlider').addEventListener('input', (e) => {
   setWorldRadius(Number(e.target.value));

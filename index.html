@@ -69,6 +69,20 @@ try {
   html,body{margin:0; height:100%; height:100dvh; overflow:hidden; overscroll-behavior:none; background:#0d0a06; font-family:'JetBrains Mono', monospace; color:var(--parchment); user-select:none; -webkit-user-select:none;}
   #app{position:fixed; inset:0; height:100dvh;}
   canvas#scene{display:block; width:100%; height:100%; touch-action:none;}
+  /* A single shared multiplier for every persistent HUD control (the
+     joystick cluster, dock, top-row icons, action button, etc.) — NOT
+     applied to the canvas itself (so the 3D view's own size is
+     completely unaffected) or to any popup modal (those already have
+     their own internal sizing/scrolling logic tuned for different
+     screens, and blowing them up here risks overflow/cropping rather
+     than helping). Each scalable element grows or shrinks from its own
+     centre independently — there's no shared wrapping container these
+     all live inside, so this couldn't be a single transform on one
+     parent without either dragging the canvas along with it or
+     requiring a much larger, riskier restructuring of the page just
+     for this one setting.
+  */
+  .ui-scalable{transform: scale(var(--ui-scale, 1));}
 
   h1,h2,h3,.display{font-family:'Fraunces', serif;}
 
@@ -954,7 +968,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v2.28</div>
+  <div id="versionLabel">v2.29</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -963,14 +977,14 @@ try {
        than dimming the whole screen — only the specific buttons that
        aren't relevant right now look inactive; the 3D view itself
        always stays completely clear. -->
-  <div id="tutorialHand" style="display:none;"><span id="tutorialHandGlyph">👇</span></div>
-  <div id="tutorialHint" style="display:none;">
+  <div id="tutorialHand" class="ui-scalable" style="display:none;"><span id="tutorialHandGlyph">👇</span></div>
+  <div id="tutorialHint" class="ui-scalable" style="display:none;">
     <span id="tutorialHintText"></span>
     <button id="tutorialNextBtn" style="display:none;">Next</button>
     <button id="tutorialSkipBtn">Skip</button>
   </div>
   <div id="lookLayer"></div>
-  <div id="leftControlCluster">
+  <div id="leftControlCluster" class="ui-scalable">
     <div id="joyBase">
       <div id="joyKnob"></div>
       <button id="flyUpBtn" aria-label="Up">▲</button>
@@ -978,12 +992,12 @@ try {
     </div>
   </div>
 
-  <div id="topLeftRow">
+  <div id="topLeftRow" class="ui-scalable">
     <button id="modeToggleBtn" title="Switch build mode"><span id="modeToggleIcon">🌳</span><small id="modeToggleLabel">Deco</small></button>
     <button id="typeMenuBtn"><span id="typeMenuLabel">WS25mZ</span> ▾</button>
     <button id="exploreModeBtn" title="Explore mode">▶</button>
   </div>
-  <div id="typeMenuPanel">
+  <div id="typeMenuPanel" class="ui-scalable">
     <div class="group" id="mainTypeGroup" style="flex-wrap:wrap; max-width:170px;">
       <button class="btn" data-type="WS20" data-studded="true">WS20mZ</button>
       <button class="btn" data-type="WS20" data-studded="false">WS20oZ</button>
@@ -992,7 +1006,7 @@ try {
       <button class="btn" id="platteBtn" data-type="PLATTE">Floor</button>
     </div>
   </div>
-  <div id="colorPanel">
+  <div id="colorPanel" class="ui-scalable">
     <div class="swatch-row">
       <button class="swatch wood-swatch active" id="colorWoodBtn" title="Natural wood"></button>
       <button class="swatch" data-color="#c0392b" style="background:#c0392b"></button>
@@ -1009,7 +1023,7 @@ try {
     </div>
   </div>
 
-  <div id="topRightRow">
+  <div id="topRightRow" class="ui-scalable">
     <button id="undoBtn" title="Undo last action">↩</button>
     <button id="achievementsBtn" title="Achievements">🏆</button>
     <button id="shareBtn" title="Share a screenshot">📷</button>
@@ -1076,7 +1090,7 @@ try {
     </div>
   </div>
 
-  <div id="dock">
+  <div id="dock" class="ui-scalable">
     <div class="panel" id="buildPanel">
       <div class="rows">
         <div id="toolGroup">
@@ -1144,20 +1158,20 @@ try {
        have a low-resolution fallback bitmap for that particular Unicode
        symbol, which looks pixelated once scaled up to the button's own
        size; a vector path never has that problem at any size or zoom. -->
-  <button id="rotateBtn" title="Rotate"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7c3.3 0 6 2.7 6 6 0 1.4-.5 2.7-1.3 3.7l1.5 1.5C19.4 16.9 20 14.5 20 13c0-4.4-3.6-8-8-8zm-6 8c0-1.4.5-2.7 1.3-3.7L5.8 7.8C4.6 9.1 4 10.5 4 13c0 4.4 3.6 8 8 8v3l5-4-5-4v3c-3.3 0-6-2.7-6-6z"/></svg></button>
-  <button id="copyAnchorBtn" title="Ghost anchor point" style="display:none;"><svg id="copyAnchorIcon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><circle id="copyAnchorDot" cx="12" cy="12" r="2.3" fill="currentColor" stroke="none"/></svg></button>
+  <button id="rotateBtn" class="ui-scalable" title="Rotate"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7c3.3 0 6 2.7 6 6 0 1.4-.5 2.7-1.3 3.7l1.5 1.5C19.4 16.9 20 14.5 20 13c0-4.4-3.6-8-8-8zm-6 8c0-1.4.5-2.7 1.3-3.7L5.8 7.8C4.6 9.1 4 10.5 4 13c0 4.4 3.6 8 8 8v3l5-4-5-4v3c-3.3 0-6-2.7-6-6z"/></svg></button>
+  <button id="copyAnchorBtn" class="ui-scalable" title="Ghost anchor point" style="display:none;"><svg id="copyAnchorIcon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><circle id="copyAnchorDot" cx="12" cy="12" r="2.3" fill="currentColor" stroke="none"/></svg></button>
 
-  <div id="aimHint"></div>
-  <div id="measureResult"></div>
+  <div id="aimHint" class="ui-scalable"></div>
+  <div id="measureResult" class="ui-scalable"></div>
 
-  <div id="actionBtn">BUILD</div>
+  <div id="actionBtn" class="ui-scalable">BUILD</div>
 
   <a id="madeByTag" href="https://www.linkedin.com/in/kevin-kupper-91817641a" target="_blank" rel="noopener noreferrer" title="Kevin Kupper auf LinkedIn">
     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.48-.9 1.63-1.85 3.35-1.85 3.58 0 4.25 2.36 4.25 5.43v6.31zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM3.56 20.45h3.56V9H3.56v11.45z"/></svg>
     Made by Kevin Kupper
   </a>
 
-  <div id="keyboardLegend">
+  <div id="keyboardLegend" class="ui-scalable">
     <div><span class="kbd">WASD</span> Move</div>
     <div><span class="kbd">Mouse</span> Look</div>
     <div><span class="kbd">Click/F</span> Place</div>
@@ -1262,6 +1276,10 @@ try {
           <input type="range" id="fovSlider" min="60" max="90" value="68">
         </div>
         <div class="settings-row">
+          <span class="settings-label">UI size</span>
+          <input type="range" id="uiScaleSlider" min="80" max="160" value="100" step="5">
+        </div>
+        <div class="settings-row">
           <span class="settings-label">Play area size <small id="worldRadiusLabel"></small></span>
           <input type="range" id="worldRadiusSlider" min="12" max="300" value="18" step="1">
         </div>
@@ -1286,7 +1304,7 @@ try {
     </div>
   </div>
 
-  <div id="levelHud">
+  <div id="levelHud" class="ui-scalable">
     <div>
       <div id="levelHudTitle"></div>
       <div id="levelHudProgress"></div>
@@ -1360,7 +1378,7 @@ try {
     </div>
   </div>
 
-  <div id="achievementToast" style="display:none;">
+  <div id="achievementToast" class="ui-scalable" style="display:none;">
     <span id="achievementToastIcon"></span>
     <div>
       <div class="sub" style="margin:0; color:var(--oak-light);">Achievement unlocked!</div>
@@ -1368,7 +1386,7 @@ try {
     </div>
   </div>
 
-  <div id="landscapeFsHint" style="display:none;">
+  <div id="landscapeFsHint" class="ui-scalable" style="display:none;">
     <span>📱 Tap for fullscreen</span>
     <button id="landscapeFsHintCloseBtn" title="Dismiss">✕</button>
   </div>
@@ -7950,6 +7968,17 @@ document.getElementById('tutorialRestartBtn').addEventListener('click', startTut
 
 /* ---------------- Settings (sound, look sensitivity, field of view) ---------------- */
 let lookSensitivity = 1; // multiplier applied on top of the base look-speed constants
+const UI_SCALE_KEY = 'briqsite_ui_scale_v1';
+let uiScale = 1;
+// Every persistent HUD control shares this one CSS variable (see the
+// .ui-scalable class) via simple inheritance down from the document
+// root — a single spot to update rather than needing to touch each
+// scalable element's own style individually.
+function setUiScale(v) {
+  uiScale = v;
+  document.documentElement.style.setProperty('--ui-scale', v);
+  try { localStorage.setItem(UI_SCALE_KEY, v); } catch (e) { /* best-effort */ }
+}
 function setLookSensitivity(v) { lookSensitivity = v; }
 function setCameraFov(v) {
   camera.fov = v;
@@ -8070,6 +8099,19 @@ document.getElementById('sensitivitySlider').addEventListener('input', (e) => {
 document.getElementById('fovSlider').addEventListener('input', (e) => {
   setCameraFov(Number(e.target.value));
 });
+document.getElementById('uiScaleSlider').addEventListener('input', (e) => {
+  setUiScale(Number(e.target.value) / 100);
+});
+// Restore whatever UI size was last chosen, same pattern as the world
+// radius slider just below — falls back to 100% (unchanged from
+// today) if nothing was ever saved.
+(function restoreUiScale() {
+  let saved = null;
+  try { saved = localStorage.getItem(UI_SCALE_KEY); } catch (e) { /* best-effort */ }
+  const v = saved !== null ? Number(saved) : 1;
+  setUiScale(v);
+  document.getElementById('uiScaleSlider').value = Math.round(v * 100);
+})();
 document.getElementById('worldRadiusSlider').addEventListener('input', (e) => {
   setWorldRadius(Number(e.target.value));
 });

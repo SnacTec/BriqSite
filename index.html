@@ -185,6 +185,11 @@ try {
      discoverable, since it's still right where the menu itself is. */
   #menuShareStack{display:flex; flex-direction:column; gap:6px; flex-shrink:0;}
   #infoBtn{font-family:'Fraunces', serif; font-style:italic; font-weight:900;}
+  /* Undo/Redo grey out whenever their stack is empty — a class rather
+     than the disabled attribute, so the tutorial's own wholesale
+     enable/disable pass never fights with it; clicking while empty was
+     already a harmless no-op anyway. */
+  #undoBtn.stack-empty, #redoBtn.stack-empty{opacity:.35;}
   #infoPanel{
     position:absolute; top:calc(56px + env(safe-area-inset-top)); right:12px; z-index:15;
     background:rgba(32,24,15,.94); border:1px solid rgba(201,138,75,.5); border-radius:10px;
@@ -1024,7 +1029,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v3.05</div>
+  <div id="versionLabel">v3.06</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1234,6 +1239,7 @@ try {
     <div><span class="kbd">Click/F</span> Place</div>
     <div><span class="kbd">R</span> Rotate</div>
     <div><span class="kbd">Z</span> Studs</div>
+    <div><span class="kbd">Ctrl+Z</span> Undo <span class="kbd">Ctrl+Y</span> Redo</div>
     <div id="keyboardLegendVertical"><span class="kbd">Space</span> Up <span class="kbd">Shift</span> Down</div>
     <div id="keyboardLegendCopyAnchor" style="display:none;"><span class="kbd">V</span> Ghost anchor</div>
   </div>
@@ -4903,7 +4909,9 @@ function placeBrick(anchor, lengthCells, orientation, mainType, studded, force, 
   mainType = mainType || 'WS25';
   if (studded === undefined) studded = true;
   if (color === undefined) color = brickColor; // explicit null (from a save file) means "no tint", left untouched
-  const crossCells = BRIQ_CATALOG[mainType].crossCells;
+  const cat = BRIQ_CATALOG[mainType];
+  if (!cat) return false; // e.g. 'WS20' from a pre-v3.00 save — that type no longer exists; skipped gracefully (the loader counts and reports these) rather than crashing with a TypeError mid-load and leaving the world half-built
+  const crossCells = cat.crossCells;
   const cells = cellsForBrick(anchor, lengthCells, crossCells, orientation);
   const fp = footprintOf(anchor, lengthCells, crossCells, orientation);
   if (!force && !isPlacementValid(cells, fp, mainType).ok) return false;
@@ -5992,6 +6000,14 @@ document.addEventListener('mousemove', (e) => {
 const keys = {};
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
+  // Ctrl/Cmd shortcuts take priority over the plain single-key bindings
+  // below and return early — otherwise Ctrl+Z (universal Undo muscle
+  // memory) would fall through to the plain KeyZ handler and toggle
+  // studs instead, which is exactly the confusing behaviour this fixes.
+  // Ctrl+Shift+Z doubles as Redo alongside Ctrl+Y, covering the two
+  // conventions different editors have trained people on.
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) redoLast(); else undoLast(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') { e.preventDefault(); redoLast(); return; }
   if (e.code === 'KeyF' || e.code === 'Enter') { e.preventDefault(); doAction(); }
   if (e.code === 'KeyR' || e.code === 'Tab') { e.preventDefault(); performRotateAction(); }
   // KeyQ used to toggle WS20/WS25 — removed along with WS20 itself,
@@ -6503,15 +6519,26 @@ function pushUndo(undoFn, redoFn) {
   undoStack.push({ undo: undoFn, redo: redoFn });
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   redoStack.length = 0;
+  syncUndoRedoButtons();
 }
 function undoLast() {
   const entry = undoStack.pop();
   if (entry) { entry.undo(); redoStack.push(entry); unlockAchievement('first_undo'); }
+  syncUndoRedoButtons();
 }
 function redoLast() {
   const entry = redoStack.pop();
   if (entry) { entry.redo(); undoStack.push(entry); }
+  syncUndoRedoButtons();
 }
+// Greys the Undo/Redo buttons out whenever their respective stack is
+// empty — pure orientation (is there anything TO undo/redo right now?).
+function syncUndoRedoButtons() {
+  const u = document.getElementById('undoBtn'), r = document.getElementById('redoBtn');
+  if (u) u.classList.toggle('stack-empty', undoStack.length === 0);
+  if (r) r.classList.toggle('stack-empty', redoStack.length === 0);
+}
+syncUndoRedoButtons(); // initial state: both stacks start empty
 function placeBrickWithUndo(anchor, lengthCells, orientation, mt, studdedVal, force, colorVal) {
   const ok = placeBrick(anchor, lengthCells, orientation, mt, studdedVal, force, colorVal);
   if (ok) {
@@ -8823,10 +8850,10 @@ function buildClipboardPreview() {
 // collision rules (force=false) — returns the new brick's id on success,
 // or null if it didn't fit there. Mirrors captureBrickForUndo's per-kind
 // dispatch, just placing instead of capturing.
-function pasteEntryAt(e, dx, dy, dz) {
-  if (e.isRoofBlock) return placeRoofBlock(e.x0 + dx, e.x1 + dx, e.z0 + dz, e.z1 + dz, e.yLow + dy, e.yHigh + dy, e.slopeAxis, e.material, false);
-  if (e.isSlabBlock) return placeSlabBlock(e.x0 + dx, e.x1 + dx, e.y + dy, e.z0 + dz, e.z1 + dz, e.mainType, e.color, false);
-  const ok = placeBrick([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, e.orientation, e.mainType, e.studded, false, e.color);
+function pasteEntryAt(e, dx, dy, dz, force) {
+  if (e.isRoofBlock) return placeRoofBlock(e.x0 + dx, e.x1 + dx, e.z0 + dz, e.z1 + dz, e.yLow + dy, e.yHigh + dy, e.slopeAxis, e.material, !!force);
+  if (e.isSlabBlock) return placeSlabBlock(e.x0 + dx, e.x1 + dx, e.y + dy, e.z0 + dz, e.z1 + dz, e.mainType, e.color, !!force);
+  const ok = placeBrick([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, e.orientation, e.mainType, e.studded, !!force, e.color);
   return ok ? (nextBrickId - 1) : null;
 }
 // Captures every Briq sitting FULLY inside [x0,x1) x [z0,z1) (x1/z1
@@ -8928,7 +8955,12 @@ function pasteClipboardAt(tx, tz) {
       () => {
         const newIds = [];
         for (const e of entries) {
-          const id = pasteEntryAt(e, tx, restY, tz);
+          // force — this exact paste was already validated once when it
+          // was originally performed; re-validating here would wrongly
+          // apply the CURRENT rules (e.g. Free Mode toggled off since
+          // then) to an action that was perfectly legal when it
+          // happened, silently rebuilding only part of it.
+          const id = pasteEntryAt(e, tx, restY, tz, true);
           if (id !== null && id !== false) newIds.push(id);
         }
         state.ids = newIds;
@@ -9574,7 +9606,7 @@ function commitDragRow() {
         const newIds = [];
         for (const slot of slots) {
           if (!slot.valid) continue;
-          if (placeBrick(slot.anchor, slot.len, capAxis, capMainType, capStudded)) newIds.push(nextBrickId - 1);
+          if (placeBrick(slot.anchor, slot.len, capAxis, capMainType, capStudded, true)) newIds.push(nextBrickId - 1); // force — same reasoning as the paste redo: this exact row already passed validation when originally built
         }
         state.ids = newIds;
         playPlaceSound(capY === 0);
@@ -9933,7 +9965,17 @@ function animate() {
   // A slab is a deliberate two-click gesture (mark corner, mark corner) —
   // holding the button must NOT auto-repeat it, or a single press-and-
   // hold would mark both corners almost instantly and fill on its own.
-  if (actionHeld && !(tool === 'place' && isSlabType(mainType)) && tool !== 'copy' && !(tool === 'remove' && removeBoxMode)) doAction();
+  // A CUBE-shaped ordinary Briq (length == cross-section, e.g. WS25B25 —
+  // no preferred direction, so it never enters the deferred-row system
+  // a longer piece uses) has the exact same problem in a different
+  // shape: with nothing to defer, doAction() places it immediately on
+  // every single call, so auto-repeating this at the render loop's own
+  // frame rate turned a held press into rapid machine-gun placement —
+  // one Briq per frame — instead of the one-press-one-Briq every other
+  // shape already gets. Excluded here the same way, for the same
+  // reason: one press should place exactly one, however long it's held.
+  const heldPieceIsCube = tool === 'place' && !isSlabType(mainType) && brickLen === BRIQ_CATALOG[mainType].crossCells;
+  if (actionHeld && !(tool === 'place' && isSlabType(mainType)) && !heldPieceIsCube && tool !== 'copy' && !(tool === 'remove' && removeBoxMode)) doAction();
   updateAimHint();
   renderer.render(scene, camera);
 }
@@ -10216,6 +10258,8 @@ function resetGame() {
   clearAllBricks();
   clearAllDecor();
   undoStack.length = 0;
+  redoStack.length = 0; // a leftover redo entry from the cleared build would otherwise paste ghost pieces into the fresh world
+  syncUndoRedoButtons();
   playerPos.set(1.6, eyeHeight, 2.0);
 }
 // Shared restore core: takes an already-parsed save object and rebuilds
@@ -10226,7 +10270,9 @@ function applyLoadedData(data) {
   if (data.env && ENVIRONMENTS[data.env]) setEnvironment(data.env, Array.isArray(data.envProps) ? data.envProps : null);
   clearAllBricks();
   undoStack.length = 0; // a freshly loaded build has no meaningful undo history of its own
+  redoStack.length = 0; // nor anything to redo INTO it — a leftover redo entry from the previous build would paste ghost pieces into this newly loaded world
   clearAllDecor();
+  let skippedUnknown = 0;
   for (const entry of data.bricks) {
     if (entry.isRoof) {
       placeRoofBlock(entry.x0, entry.x1, entry.z0, entry.z1, entry.yLow, entry.yHigh, entry.slopeAxis, entry.material, true);
@@ -10236,13 +10282,15 @@ function applyLoadedData(data) {
       placeSlabBlock(entry.x0, entry.x1, entry.y, entry.z0, entry.z1, entry.mainType, entry.color || null, true);
       continue;
     }
-    placeBrick([entry.x, entry.y, entry.z], entry.len, entry.orientation, entry.mainType, entry.studded, true, entry.color || null);
+    if (!placeBrick([entry.x, entry.y, entry.z], entry.len, entry.orientation, entry.mainType, entry.studded, true, entry.color || null)) skippedUnknown++;
   }
   if (Array.isArray(data.decor)) {
     for (const entry of data.decor) {
       addDecor(entry.type, entry.x, entry.z, entry.rotY, entry.y || 0, true, entry.scale || 1);
     }
   }
+  if (skippedUnknown > 0) alert(skippedUnknown + ' piece(s) in this save use a wall type that no longer exists in this version (the removed WS20) and were skipped — the rest of the build loaded normally.');
+  syncUndoRedoButtons();
   updateHud();
   return true;
 }

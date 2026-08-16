@@ -173,7 +173,7 @@ try {
     position:absolute; top:calc(12px + env(safe-area-inset-top)); right:12px; z-index:15;
     display:flex; align-items:center; gap:6px;
   }
-  #undoBtn, #achievementsBtn, #shareBtn, #fullscreenBtn, #infoBtn, #menuBtn{
+  #undoBtn, #redoBtn, #achievementsBtn, #shareBtn, #fullscreenBtn, #infoBtn, #menuBtn{
     font-size:18px; font-weight:700;
     color:var(--parchment); background:rgba(32,24,15,.82); border:1px solid rgba(201,138,75,.5);
     border-radius:9px; width:38px; height:38px; cursor:pointer; box-shadow:var(--shadow);
@@ -978,7 +978,7 @@ try {
      action, and can just be hidden outright. */
   body.desktop-ui #actionBtn, body.desktop-ui #rotateBtn, body.desktop-ui #copyAnchorBtn{display:none;}
   body.desktop-ui .group-label{font-size:11px;}
-  body.desktop-ui #undoBtn, body.desktop-ui #achievementsBtn, body.desktop-ui #shareBtn,
+  body.desktop-ui #undoBtn, body.desktop-ui #redoBtn, body.desktop-ui #achievementsBtn, body.desktop-ui #shareBtn,
   body.desktop-ui #fullscreenBtn, body.desktop-ui #infoBtn, body.desktop-ui #menuBtn{
     width:46px; height:46px; font-size:22px;
   }
@@ -1019,7 +1019,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v2.34</div>
+  <div id="versionLabel">v3.00</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1050,8 +1050,6 @@ try {
   </div>
   <div id="typeMenuPanel" class="ui-scalable">
     <div class="group" id="mainTypeGroup" style="flex-wrap:wrap; max-width:170px;">
-      <button class="btn" data-type="WS20" data-studded="true">WS20mZ</button>
-      <button class="btn" data-type="WS20" data-studded="false">WS20oZ</button>
       <button class="btn active" data-type="WS25" data-studded="true">WS25mZ</button>
       <button class="btn" data-type="WS25" data-studded="false">WS25oZ</button>
       <button class="btn" id="platteBtn" data-type="PLATTE">Floor</button>
@@ -1076,6 +1074,7 @@ try {
 
   <div id="topRightRow" class="ui-scalable">
     <button id="undoBtn" title="Undo last action">↩</button>
+    <button id="redoBtn" title="Redo last undone action">↪</button>
     <button id="achievementsBtn" title="Achievements">🏆</button>
     <button id="shareBtn" title="Share a screenshot">📷</button>
     <button id="fullscreenBtn" title="Fullscreen">⛶</button>
@@ -1227,7 +1226,7 @@ try {
     <div><span class="kbd">Mouse</span> Look</div>
     <div><span class="kbd">Click/F</span> Place</div>
     <div><span class="kbd">R</span> Rotate</div>
-    <div><span class="kbd">Q</span> Type <span class="kbd">Z</span> Studs</div>
+    <div><span class="kbd">Z</span> Studs</div>
     <div id="keyboardLegendVertical"><span class="kbd">Space</span> Up <span class="kbd">Shift</span> Down</div>
     <div id="keyboardLegendCopyAnchor" style="display:none;"><span class="kbd">V</span> Ghost anchor</div>
   </div>
@@ -1317,6 +1316,10 @@ try {
         <div class="settings-row">
           <span class="settings-label">Sound effects</span>
           <button class="btn active" id="soundToggleBtn">🔊<small>On</small></button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Free mode <small>(build beside, not just on top)</small></span>
+          <button class="btn" id="freeModeToggleBtn">🧱<small>Off</small></button>
         </div>
         <div class="settings-row">
           <span class="settings-label">Look sensitivity</span>
@@ -4448,51 +4451,41 @@ let totalPlaced = 0;
 
 const brickMeshes = [];            // for raycasting removal / surfaces
 
-/* ----- Real TRIQBRIQ product line -----
-   Two wall systems, each with a short "filler" module and a long "main"
-   module (per the official Baustellenhandbuch: e.g. WS25 is built from
-   BRIQ 25-50 as the main piece and BRIQ 25-25 as the filler/closer):
-     WS20 → WS20 B20 (short, 1 cell) / WS20 B40 (long, 2 cells) — 20 cm wall
-     WS25 → WS25 B25 (short, 1 cell) / WS25 B50 (long, 2 cells) — 25 cm wall
-   1 game cell = the short module's length. The main type (wall system) can
-   be swapped at any time so a house can mix WS20 and WS25 walls. Both use
-   the FULL 1×1 cross-section — a thinner WS20 would leave a visible gap
-   whenever it is stacked under/over a WS25 course, and BRIQs must always
-   sit flush against each other. The two systems are told apart by colour
-   only, not by size. */
-/* ----- Real TRIQBRIQ product line, at true scale -----
-   1 game cell = 5 cm (the shared module of the 20cm and 25cm systems).
-   WS20 → WS20 B20 (20×20×20cm) / WS20 B40 (20×20×40cm)
-   WS25 → WS25 B25 (25×25×25cm) / WS25 B50 (25×25×50cm)
-   crossCells is the brick's true width AND height in cells (both equal
-   the wall thickness, exactly like the real product); lengthCells is
-   how far it runs along the wall. Because everything is expressed in
-   whole 5cm cells, any course of one type sits perfectly flush against
-   any course of the other — no gaps, ever — while still rendering each
-   system at its true, distinct real-world size. */
+/* ----- UNIFIED GRID (as of v3.00) -----
+   WS20 has been removed entirely and Floor (Platte) now shares WS25's
+   own 25cm module (crossCells 5) instead of its own separate 15cm one —
+   collapsing what used to be THREE different module sizes in play
+   (WS20's 20cm, WS25's 25cm, Platte's 15cm) down to just one. Most of
+   the elaborate "nearby match" grid-reconciliation logic further down
+   this file (computeAnchorFromHit's nearbyCrossMatch/nearbyLengthMatch)
+   existed specifically to paper over positions that DON'T share a grid
+   at all — with only one real grid left, that logic is no longer load-
+   bearing for THAT specific reason (though it's left in place rather
+   than torn out: it still correctly handles a Platte's footprint being
+   wider than a single module, which is a separate concern from grid
+   alignment). Deco items keep their own independent placement grid for
+   now — deliberately out of scope for this pass.
+   See /home/claude/backups/briqbaustelle_v3_v2.34.html for the last
+   pre-unification version (WS20 still present, Floor at its own 15cm),
+   if that's ever needed for reference or reverting. */
 const BRIQ_CATALOG = {
-  WS20: {
-    label: 'WS20', crossCells: 4, // 20 cm
-    sizes: { B20: { len: 4 }, B40: { len: 8 } },
-  },
   WS25: {
     label: 'WS25', crossCells: 5, // 25 cm
     sizes: { B25: { len: 5 }, B50: { len: 10 }, B200: { len: 40 }, B400: { len: 80 } },
   },
   // A pseudo-type used internally by the Platte (slab) tool only — never
   // selectable through the normal type menu, and not a real wall system.
-  // `isSlab: true` is what makes a Platte genuinely universal: the
-  // structural "different wall types can't sit directly on each other"
-  // rule explicitly skips this flag, so a WS20 interior wall can always
-  // sit flush against a WS25 exterior wall — and a Platte laid between/
-  // under/over them must never get in the way of that. A Platte is
-  // ALWAYS this same fixed 15cm, regardless of what it's touching when
-  // drawn — it behaves exactly like an elevated patch of ground, not
-  // like a wall of its own that happens to match something else's
-  // thickness.
+  // Now sharing WS25's own 25cm module (crossCells 5) rather than a
+  // separate 15cm one of its own — a Floor placed flush against, or
+  // stacked on top of, a WS25 wall now lands exactly on the SAME grid
+  // as that wall, on both axes, with nothing left to reconcile between
+  // the two. `isSlab: true` still matters even with only one real wall
+  // system: it's what lets a Floor sit UNDER or OVER a wall without
+  // tripping the "can't build directly on top of a different type"
+  // rule below, which is a genuinely separate concern from grid size.
   PLATTE: {
-    label: 'Floor', crossCells: 3, isSlab: true, // 15 cm, always
-    sizes: { P: { len: 3 } },
+    label: 'Floor', crossCells: 5, isSlab: true, // 25 cm, matching WS25
+    sizes: { P: { len: 5 } },
   },
   // A pseudo-type for roof panels — also universal/neutral (isSlab),
   // also always the same fixed thickness regardless of what it touches.
@@ -4644,7 +4637,7 @@ function getWoodMat(mainType, lengthCells) {
   const k = mainType + '_' + lengthCells;
   if (!woodMatCache[k]) {
     const moduleCount = lengthCells / BRIQ_CATALOG[mainType].crossCells; // 1 = short, 2 = long
-    const baseHex = mainType === 'WS20' ? (moduleCount >= 2 ? 0xcf9a5f : 0xe0b27e) : (moduleCount >= 2 ? 0xc98a4b : 0xd9a05f);
+    const baseHex = moduleCount >= 2 ? 0xc98a4b : 0xd9a05f; // WS25's own tone — the WS20-specific shade this used to branch to no longer applies now that WS20 is gone
     const tex = makeBriqTexture(baseHex, moduleCount);
     woodMatCache[k] = new THREE.MeshStandardMaterial({
       map: tex, bumpMap: tex, bumpScale: 0.012, roughness: 0.82, metalness: 0,
@@ -4832,34 +4825,22 @@ function cellsFree(cells) {
    vertical joint must be staggered course to course, or the wall is
    unstable. The ground floor (y === 0) always rests directly on the
    foundation, so it is exempt.
-   A brick also needs at least some support below it — but not
-   necessarily along its whole footprint: the real BRIQ 240 is explicitly
-   designed to span door/window openings as a lintel, resting only on the
-   wall on either side, so a brick may cantilever over a gap as long as it
-   touches something on at least one cell of its footprint.
-   Different wall systems (WS20/WS25) are never stacked on top of one
-   another — they are separate, incompatible systems in reality, so a
-   BRIQ may only rest on ground or on a BRIQ of its own main type. */
-/* A brick needs at least some support below it — but not necessarily
+   A brick needs at least some support below it — but not necessarily
    along its whole footprint: a long lintel (WS25 B200/B400) is explicitly
    meant to span a door/window opening, resting only on the wall on either
    side, so a brick may cantilever over a gap as long as it touches
    something on at least one cell of its footprint. Bricks no longer need
    to be staggered/offset like real masonry — you may stack one directly
-   on top of another if you want to, or offset it; both are fine. Only
-   different main types (WS20/WS25) may never sit directly on each other. */
-/* A brick needs at least some support below it — but not necessarily
-   along its whole footprint: a long lintel (WS25 B200/B400) is explicitly
-   meant to span a door/window opening, resting only on the wall on either
-   side, so a brick may cantilever over a gap as long as it touches
-   something on at least one cell of its footprint. Bricks no longer need
-   to be staggered/offset like real masonry — you may stack one directly
-   on top of another if you want to, or offset it; both are fine. Only
-   different REAL wall systems (WS20/WS25) may never sit directly on each
-   other. A Platte (floor/roof slab, mainType 'PLATTE') is a neutral base
-   that is never part of that restriction — any type may build on top of
-   a Platte, and a Platte may cap any type, since it isn't a wall system
-   of its own at all. */
+   on top of another if you want to, or offset it; both are fine.
+   The "different wall systems may never sit directly on each other" rule
+   below is a holdover from when WS20 and WS25 coexisted as two distinct,
+   incompatible real systems — with WS20 removed there's only WS25 left,
+   so it can no longer actually trigger, but it's left in place rather
+   than torn out in case a second real wall system is ever reintroduced.
+   A Platte (floor/roof slab, mainType 'PLATTE') is a neutral base that
+   was never part of that restriction either way: any type may build on
+   top of a Platte, and a Platte may cap any type, since it isn't a wall
+   system of its own at all. */
 function structuralCheck(fp, mainType) {
   if (fp.y0 <= 0) return { ok: true };
   let supported = 0;
@@ -4870,6 +4851,29 @@ function structuralCheck(fp, mainType) {
       if (id !== undefined) { supported++; belowIds.add(id); }
     }
   }
+  // Free Mode: a Briq may ALSO count as supported by touching an
+  // existing Briq on its SIDE or END, at the same course — not only by
+  // resting on something directly underneath. This is checked only as
+  // a fallback (nothing changes when support from below already
+  // exists), and only ever ADDS placement freedom on top of the normal
+  // rule, never removes the normal "something must actually be there"
+  // requirement entirely — a Briq floating with nothing touching it in
+  // ANY direction is still rejected either way.
+  if (supported === 0 && freeMode) {
+    outer:
+    for (let y = fp.y0; y <= fp.y1; y++) {
+      for (const x of [fp.x0 - 1, fp.x1 + 1]) {
+        for (let z = fp.z0; z <= fp.z1; z++) {
+          if (occupancy.has(key(x, y, z))) { supported = 1; break outer; }
+        }
+      }
+      for (const z of [fp.z0 - 1, fp.z1 + 1]) {
+        for (let x = fp.x0; x <= fp.x1; x++) {
+          if (occupancy.has(key(x, y, z))) { supported = 1; break outer; }
+        }
+      }
+    }
+  }
   if (supported === 0) {
     return { ok: false, reason: 'No support — at least one side must rest on something.' };
   }
@@ -4877,7 +4881,7 @@ function structuralCheck(fp, mainType) {
     for (const id of belowIds) {
       const belowType = bricks.get(id).mainType;
       if (belowType !== mainType && !isSlabType(belowType)) {
-        return { ok: false, reason: 'WS20 and WS25 cannot be built directly on top of each other.' };
+        return { ok: false, reason: 'Different wall types cannot be built directly on top of each other.' };
       }
     }
   }
@@ -4957,7 +4961,7 @@ let decorRotation = 0;    // pending facing angle (radians) for the NEXT Deko pl
 let removeGridCells = 1;  // how wide an area (in fine cells) a single Remove press clears — 1 = just the targeted Briq
 let removeBoxMode = false; // Box mode replaces the single-press area entirely: drag a rectangle on the ground (like Copy), then EVERY Briq inside it at ANY height gets cleared in one go, regardless of removeGridCells.
 let removeBoxStart = null; // { x, z } in whole cells, the first marked corner of the box (null while nothing marked yet)
-let mainType = 'WS25';    // 'WS20' | 'WS25' — can be switched anytime, even mid-house
+let mainType = 'WS25';    // 'WS25' — the only real wall system left; kept as a variable rather than a hardcoded constant in case a second one is ever added back
 let sizeKey = 'B50';      // which size of the current main type
 let studded = true;       // true = "mZ" (mit Zapfen), false = "oZ" (ohne Zapfen)
 let orientation = 'x';    // 'x' | 'z'
@@ -5983,7 +5987,8 @@ window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'KeyF' || e.code === 'Enter') { e.preventDefault(); doAction(); }
   if (e.code === 'KeyR' || e.code === 'Tab') { e.preventDefault(); performRotateAction(); }
-  if (e.code === 'KeyQ') { mainType = mainType === 'WS20' ? 'WS25' : 'WS20'; if (!BRIQ_CATALOG[mainType].sizes[sizeKey]) sizeKey = Object.keys(BRIQ_CATALOG[mainType].sizes)[0]; applyType(); }
+  // KeyQ used to toggle WS20/WS25 — removed along with WS20 itself,
+  // there's only one wall type left to switch to.
   if (e.code === 'KeyZ') { studded = !studded; applyType(); }
   if (e.code === 'KeyV' && tool === 'copy' && clipboard) { cycleCopyGhostAnchorMode(); }
   if (e.code === 'Space' && exploreMode) { e.preventDefault(); jumpRequested = true; }
@@ -6033,17 +6038,28 @@ function endAction() {
   // would otherwise keep pushing for as long as the button stayed held.
   if (paintStrokeChanges && paintStrokeChanges.size > 0) {
     const changes = paintStrokeChanges;
-    pushUndo(() => {
-      changes.forEach(({ b, oldColor }, id) => {
+    // Redo needs to reapply whatever colour the stroke actually left
+    // each Briq at — captured here (rather than re-reading brickColor
+    // later) since the currently-selected colour could easily have
+    // changed by the time a much later redo actually runs.
+    const newColors = new Map();
+    changes.forEach(({ b }, id) => newColors.set(id, b.color));
+    const applyStrokeColors = (colorFor) => {
+      changes.forEach(({ b }, id) => {
         if (bricks.get(id) !== b) return; // this Briq was removed again since the stroke — nothing left to revert
+        const color = colorFor(id);
         const depthCells = b.footprint.z1 - b.footprint.z0 + 1;
-        const revertMat = b.isSlabBlock
-          ? getSlabBodyMat(b.mainType, b.lengthCells, depthCells, oldColor)
-          : getWoodMatTinted(b.mainType, b.lengthCells, oldColor);
-        b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
-        b.color = oldColor;
+        const mat = b.isSlabBlock
+          ? getSlabBodyMat(b.mainType, b.lengthCells, depthCells, color)
+          : getWoodMatTinted(b.mainType, b.lengthCells, color);
+        b.mesh.traverse((child) => { if (child.isMesh) child.material = mat; });
+        b.color = color;
       });
-    });
+    };
+    pushUndo(
+      () => applyStrokeColors((id) => changes.get(id).oldColor),
+      () => applyStrokeColors((id) => newColors.get(id))
+    );
   }
   paintStrokeChanges = null;
   actionHeld = false;
@@ -6282,6 +6298,25 @@ function computeAnchorFromHit(hit, mainType, brickLen, orientation) {
   const crossMatch = (val, fpMin, axisIsX, approxLength) => {
     if (!fp) return Math.round(val / crossCells) * crossCells;
     if (b && b.isSlabBlock && axisIsX !== undefined) return nearbyCrossMatch(axisIsX, val, approxLength);
+    // An ordinary (non-slab) touched brick is normally exactly ONE
+    // module wide on this axis, so its own edge (fpMin) is the only
+    // valid cross position anyway — correct for e.g. a WS25 B25/B50
+    // touched end-on. But a MULTI-MODULE brick (WS25 B200/B400, or a
+    // B50 seen from its long side) is not: attaching a new piece
+    // perpendicular to its long side should be able to land on ANY of
+    // its own module positions along that length, not be forced onto
+    // just its very first one regardless of where along it was
+    // actually clicked. Rounding relative to the touched brick's own
+    // start (same idea as lengthRightEdge's own fix just below, for
+    // the exact same reason) opens up every module position instead.
+    // axisIsX undefined means this is the Y (vertical) axis, which has
+    // no such multi-module concept at all — left completely untouched.
+    if (axisIsX !== undefined) {
+      const fpMax = axisIsX ? fp.x1 : fp.z1;
+      if (fpMax - fpMin + 1 > crossCells) {
+        return fpMin + Math.round((val - fpMin) / crossCells) * crossCells;
+      }
+    }
     return fpMin;
   };
   // The LENGTH axis normally just grid-rounds to the new piece's own
@@ -6341,7 +6376,19 @@ function computeAnchorFromHit(hit, mainType, brickLen, orientation) {
       const touchedStart = axisIsX ? fp.x0 : fp.z0;
       return touchedStart + Math.round((val - touchedStart) / crossCells) * crossCells - extent;
     }
-    return nearbyLengthMatch(axisIsX, val, approxCross, extent);
+    // A genuine GROUND click (no brick touched at all) always uses the
+    // plain, fixed world-origin grid here too — matching crossMatch's
+    // own !fp case just above, which already worked this way. This used
+    // to instead search for a nearby neighbour to snap flush against
+    // (nearbyLengthMatch), specifically to let a WS20 wall land flush
+    // beside a WS25 one despite their two grids not sharing positions —
+    // with WS20 removed and Floor sharing WS25's own grid too, there is
+    // no longer a second, incompatible grid left to reconcile against,
+    // and that same flexibility instead let ordinary same-type building
+    // on bare ground silently drift off the clean 25cm grid through a
+    // chain of neighbour-relative placements, however slightly, which
+    // this game deliberately does not want any more.
+    return Math.round(val / crossCells) * crossCells - extent;
   };
   const anchor = [
     n.x !== 0 ? stepAxis(n.x, fp ? fp.x0 : 0, fp ? fp.x1 + 1 : 0, extentX)
@@ -6429,27 +6476,44 @@ function updateDecorAimAndGhost() {
     }
   }
 }
-/* ---------------- Undo ---------------- */
+/* ---------------- Undo / Redo ---------------- */
 // One entry per user action (a single Briq/Deko placed or removed, or one
-// whole Platte fill) — each entry is just a function that reverses
-// exactly that action. Deliberately per-action, not per hold-session: a
-// held run of several Briqs undoes one at a time, same as placing them
-// took one tap/frame at a time.
+// whole Platte fill) — each entry is just a PAIR of functions that
+// reverse, and re-apply, exactly that action. Deliberately per-action,
+// not per hold-session: a held run of several Briqs undoes one at a
+// time, same as placing them took one tap/frame at a time.
 let undoStack = [];
+let redoStack = [];
 const MAX_UNDO = 50;
-function pushUndo(fn) {
-  undoStack.push(fn);
+// pushUndo is how every ordinary action registers itself — genuinely
+// NEW actions always clear the redo stack (the standard, expected
+// behaviour of any undo/redo system: once you do something new, the
+// "future" that redo used to point to no longer exists). undoLast and
+// redoLast below move ENTRIES between the two stacks directly instead
+// of going through pushUndo again, since neither of those is a new
+// action — they're replaying one that's already recorded.
+function pushUndo(undoFn, redoFn) {
+  undoStack.push({ undo: undoFn, redo: redoFn });
   if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
 }
 function undoLast() {
-  const fn = undoStack.pop();
-  if (fn) { fn(); unlockAchievement('first_undo'); }
+  const entry = undoStack.pop();
+  if (entry) { entry.undo(); redoStack.push(entry); unlockAchievement('first_undo'); }
+}
+function redoLast() {
+  const entry = redoStack.pop();
+  if (entry) { entry.redo(); undoStack.push(entry); }
 }
 function placeBrickWithUndo(anchor, lengthCells, orientation, mt, studdedVal, force, colorVal) {
   const ok = placeBrick(anchor, lengthCells, orientation, mt, studdedVal, force, colorVal);
   if (ok) {
-    const placedId = nextBrickId - 1;
-    pushUndo(() => removeBrickAt(bricks.get(placedId).cells[0]));
+    const crossCells = BRIQ_CATALOG[mt].crossCells;
+    const firstCell = cellsForBrick(anchor, lengthCells, crossCells, orientation)[0];
+    pushUndo(
+      () => removeBrickAt(firstCell),
+      () => { placeBrick(anchor, lengthCells, orientation, mt, studdedVal, true, colorVal); playPlaceSound(anchor[1] === 0); }
+    );
     playPlaceSound(anchor[1] === 0);
     recordBriqsPlaced(1);
     notifyTutorial('build');
@@ -6462,7 +6526,10 @@ function removeBrickWithUndo(cellArr) {
   const ok = removeBrickAt(cellArr);
   if (ok && removedBrick) {
     const captured = captureBrickForUndo(removedBrick);
-    pushUndo(() => restoreBrickFromCapture(captured));
+    pushUndo(
+      () => restoreBrickFromCapture(captured),
+      () => { removeBrickAt(cellArr); playRemoveSound(); }
+    );
     playRemoveSound();
     unlockAchievement('first_remove');
     notifyTutorial('remove');
@@ -6498,7 +6565,10 @@ function removeAreaAt(targetCell, gridCells) {
     removeBrickAt(b.cells[0]);
   }
   if (removedData.length) {
-    pushUndo(() => { for (const d of removedData) restoreBrickFromCapture(d); });
+    pushUndo(
+      () => { for (const d of removedData) restoreBrickFromCapture(d); },
+      () => { for (const d of removedData) removeBrickAt(firstCellOfCapture(d)); playRemoveSound(); }
+    );
     playRemoveSound();
     unlockAchievement('first_remove');
     notifyTutorial('remove');
@@ -6531,7 +6601,10 @@ function removeBoxArea(x0, x1, z0, z1) {
     removeBrickAt(b.cells[0]);
   }
   if (removedData.length) {
-    pushUndo(() => { for (const d of removedData) restoreBrickFromCapture(d); });
+    pushUndo(
+      () => { for (const d of removedData) restoreBrickFromCapture(d); },
+      () => { for (const d of removedData) removeBrickAt(firstCellOfCapture(d)); playRemoveSound(); }
+    );
     playRemoveSound();
     unlockAchievement('first_remove');
     notifyTutorial('remove');
@@ -6541,7 +6614,10 @@ function removeBoxArea(x0, x1, z0, z1) {
 function doSlabFillWithUndo(x0, x1, z0, z1, y, mt, colorVal) {
   const id = placeSlabBlock(x0, x1, y, z0, z1, mt, colorVal, false);
   if (id !== null) {
-    pushUndo(() => removeBrickAt(bricks.get(id).cells[0]));
+    pushUndo(
+      () => removeBrickAt([x0, y, z0]),
+      () => { placeSlabBlock(x0, x1, y, z0, z1, mt, colorVal, true); playPlaceSound(y === 0); }
+    );
     playPlaceSound(y === 0);
     recordBriqsPlaced(1);
     unlockAchievement('first_platte');
@@ -6590,13 +6666,19 @@ function doPaintAction() {
   } else {
     // No active stroke to batch into (shouldn't normally happen, since
     // beginAction always opens one before the first paint of a press) —
-    // falls back to its own individual undo step rather than silently
-    // losing undo support altogether.
-    pushUndo(() => {
-      const revertMat = getMat(oldColor);
-      b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
-      b.color = oldColor;
-    });
+    // falls back to its own individual undo/redo step rather than
+    // silently losing that support altogether.
+    pushUndo(
+      () => {
+        const revertMat = getMat(oldColor);
+        b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
+        b.color = oldColor;
+      },
+      () => {
+        b.mesh.traverse((child) => { if (child.isMesh) child.material = newMat; });
+        b.color = newColor;
+      }
+    );
   }
 }
 
@@ -6607,7 +6689,22 @@ function doDecorAction() {
       const ok = addDecor(decorType, currentDecorPos.x, currentDecorPos.z, decorRotation, currentDecorPos.y, false, size);
       if (ok) {
         const added = placedDecor[placedDecor.length - 1];
-        pushUndo(() => removeDecorAt(added.mesh));
+        // A mesh reference is how Deko objects are identified for
+        // removal — since re-adding one during a redo always creates a
+        // BRAND NEW mesh (never the same object twice), the shared
+        // "state" object below is what lets undo keep pointing at
+        // whichever mesh is actually the current one, across as many
+        // undo/redo cycles as the person wants to bounce back and forth.
+        const state = { mesh: added.mesh };
+        const capType = decorType, capX = currentDecorPos.x, capZ = currentDecorPos.z, capRotY = decorRotation, capY = currentDecorPos.y, capSize = size;
+        pushUndo(
+          () => removeDecorAt(state.mesh),
+          () => {
+            addDecor(capType, capX, capZ, capRotY, capY, true, capSize);
+            state.mesh = placedDecor[placedDecor.length - 1].mesh;
+            playPlaceSound(!capY);
+          }
+        );
         playPlaceSound(!currentDecorPos.y);
         unlockAchievement('first_deko');
         if (LIT_DECOR_TYPES[decorType]) unlockAchievement('lit_up');
@@ -6617,7 +6714,11 @@ function doDecorAction() {
   } else if (currentDecorRemoveTarget) {
     const { type, x, z, rotY, y, scale } = currentDecorRemoveTarget;
     removeDecorAt(currentDecorRemoveTarget.mesh);
-    pushUndo(() => addDecor(type, x, z, rotY, y, true, scale));
+    const state = {};
+    pushUndo(
+      () => { addDecor(type, x, z, rotY, y, true, scale); state.mesh = placedDecor[placedDecor.length - 1].mesh; },
+      () => { removeDecorAt(state.mesh); playRemoveSound(); }
+    );
     playRemoveSound();
     triggerCrosshairSwing('remove');
     unlockAchievement('first_remove');
@@ -6790,6 +6891,7 @@ function computeSlabCorner(hit, forcedType, defaultType) {
   const isGround = hit.object === ground;
   let y;
   let touchedTop = false; // did the click land on the brick's TOP face specifically, as opposed to one of its sides?
+  let sideNormalIsX = null; // for a SIDE click specifically: does the clicked face's own outward normal point along X (an end cap) or Z (a long side)? null for ground/top clicks, where it isn't meaningful.
   const slabType = forcedType || defaultType || 'PLATTE';
   if (isGround) {
     y = 0;
@@ -6799,7 +6901,7 @@ function computeSlabCorner(hit, forcedType, defaultType) {
     const fp = b ? b.footprint : null;
     if (!fp) y = 0;
     else if (n.y > 0) { y = fp.y1 + 1; touchedTop = true; } // clicked the top of a wall -> the course resting on it
-    else y = fp.y0; // clicked a side -> the same course as that brick
+    else { y = fp.y0; sideNormalIsX = n.x !== 0; } // clicked a side -> the same course as that brick, and note which axis that side's own face actually points along
   }
   const crossCells = BRIQ_CATALOG[slabType].crossCells;
   const touchedBrick = isGround ? null : bricks.get(hit.object.userData.brickId);
@@ -6855,7 +6957,7 @@ function computeSlabCorner(hit, forcedType, defaultType) {
     // itself built flush against a wall — the wall shares that same
     // corner) resolves by whichever brick the Map happens to iterate
     // first, not by which one the player is actually standing on.
-    function edgeCandidates(oThisMin, oThisMax, isSelfBrick) {
+    function edgeCandidates(oThisMin, oThisMax, isSelfBrick, alongOwnFace) {
       // doSlabAction treats each corner's returned value as a "cell-start
       // anchor": whichever of the two corners ends up numerically larger
       // gets +crossCells added to become the far boundary.
@@ -6876,9 +6978,64 @@ function computeSlabCorner(hit, forcedType, defaultType) {
       // must be pre-shrunk by crossCells so doSlabAction's own addition
       // cancels out and lands exactly back on that same far edge, rather
       // than overshooting one Platte-width past it.
-      return isSelfBrick
-        ? [{ edge: oThisMin, anchor: oThisMin }, { edge: oThisMax + 1, anchor: oThisMax + 1 - crossCells }]
-        : [{ edge: oThisMin, anchor: oThisMin - crossCells }, { edge: oThisMax + 1, anchor: oThisMax + 1 }];
+      if (isSelfBrick) {
+        return [{ edge: oThisMin, anchor: oThisMin }, { edge: oThisMax + 1, anchor: oThisMax + 1 - crossCells }];
+      }
+      const candidates = [
+        { edge: oThisMin, anchor: oThisMin - crossCells },
+        { edge: oThisMax + 1, anchor: oThisMax + 1 },
+      ];
+      // A multi-module wall (WS25 B50/B200/B400) has legitimate
+      // positions all along its own length, not just flush past its two
+      // absolute ends — its own INTERNAL module boundaries are each a
+      // perfectly valid spot to start a new Platte from, extending
+      // outward on the OTHER axis from wherever along the wall's face
+      // was actually clicked. Without these, the two candidates above
+      // were the ONLY reachable outcomes for the entire length of a
+      // long wall: literally every click anywhere along its face
+      // resolved to whichever end happened to be nearer, and any
+      // position strictly between its two ends was never reachable at
+      // all, however precisely aimed — the "right half" of a 2-module
+      // wall's face, for instance, only reachable by luck.
+      const span = oThisMax - oThisMin + 1;
+      const steps = Math.round(span / crossCells);
+      if (steps > 1) {
+        if (alongOwnFace) {
+          // Clicking directly along the touched brick's OWN long face
+          // (not searching among OTHER, separate neighbours) — every
+          // position, including what would otherwise be the two
+          // extremes, behaves identically here: landing the new Floor's
+          // own corner exactly at that module boundary, used as-is with
+          // no offset, since you're choosing WHERE along this specific
+          // wall's own length to start, not attaching outside it
+          // entirely. Mixing an offset "flush outside" convention for
+          // the two ends with a plain "start exactly here" convention
+          // for the interior meant clicking right at the wall's own
+          // first module (its most natural, expected target) instead
+          // returned a position one whole module BEFORE the wall —
+          // never the wall's own first module at all — while clicking
+          // its actual midpoint correctly returned the second module, a
+          // confusing, seemingly-arbitrary jump instead of predictable,
+          // evenly-spaced positions along the whole length.
+          candidates.length = 0;
+          for (let i = 0; i <= steps; i++) {
+            const edge = oThisMin + i * crossCells;
+            candidates.push({ edge, anchor: edge });
+          }
+        } else {
+          // A GROUND click searching among OTHER, separate bricks keeps
+          // the two true extremes as genuine "flush outside its
+          // footprint entirely" attachment points (needed for e.g.
+          // extending a wall end-to-end past a neighbour) — only adding
+          // the interior boundaries as FURTHER options alongside them,
+          // not replacing them.
+          for (let i = 1; i < steps; i++) {
+            const edge = oThisMin + i * crossCells;
+            candidates.push({ edge, anchor: edge });
+          }
+        }
+      }
+      return candidates;
     }
     if (touchedBrick) {
       const f2 = touchedBrick.footprint;
@@ -6906,11 +7063,40 @@ function computeSlabCorner(hit, forcedType, defaultType) {
       // exact footprint" anchor instead of "offset outward", landing the
       // new Platte's corner partway INSIDE the touched brick instead of
       // flush against its outer face.
+      //
+      // For a SIDE click specifically (touchedTop === false), only ONE
+      // of the two axes should actually get that "offset outward, flush
+      // beside it" treatment: whichever axis matches the CLICKED FACE's
+      // own outward normal direction (sideNormalIsX). The OTHER axis —
+      // running ALONG that same face, e.g. the length of a wall's long
+      // side, or the width of its end cap — needs different treatment
+      // depending on how wide the touched brick actually is along it:
+      // if that's its narrow cross-section (e.g. an end cap's own
+      // width), the new Floor must reproduce that exact same width, not
+      // search for a "beside" position that doesn't apply to it at all;
+      // if it's a genuinely long axis (e.g. a wall's own length, seen
+      // from its long side), every position along it is fair game, not
+      // just its two absolute ends. Applying the SAME "offset outward"
+      // treatment to BOTH axes regardless of which one the click's own
+      // normal pointed along was actually two related bugs at once: a
+      // long-side click could only ever reach a wall's two absolute
+      // ends along its length (fixed via the interior candidates below)
+      // — and an END CAP click pushed the new Floor sideways, off the
+      // wall's own width, instead of straight out past the end where it
+      // visibly belongs.
+      const oThisMin = axisIsX ? f2.x0 : f2.z0;
+      const oThisMax = axisIsX ? f2.x1 : f2.z1;
+      const isNormalAxis = touchedTop || sideNormalIsX === null || axisIsX === sideNormalIsX;
+      if (!touchedTop && !isNormalAxis && (oThisMax - oThisMin + 1) <= crossCells) {
+        // The "along the face" axis, but on the touched brick's own
+        // NARROW side (e.g. an end cap's width) — reproduce its exact
+        // extent, no search, no offset, exactly like a top-click's self
+        // semantics already do.
+        return oThisMin;
+      }
       {
-        const oThisMin = axisIsX ? f2.x0 : f2.z0;
-        const oThisMax = axisIsX ? f2.x1 : f2.z1;
         let selfBest = null, selfBestDist = Infinity;
-        for (const c of edgeCandidates(oThisMin, oThisMax, touchedTop)) {
+        for (const c of edgeCandidates(oThisMin, oThisMax, touchedTop, !touchedTop && !isNormalAxis)) {
           const dist = Math.abs(approxThis - c.edge);
           if (dist <= selfDistLimit + 1e-6 && dist < selfBestDist) { selfBestDist = dist; selfBest = c.anchor; }
         }
@@ -7171,6 +7357,17 @@ function restoreBrickFromCapture(d) {
   else if (d.isSlabBlock) placeSlabBlock(d.x0, d.x1, d.y, d.z0, d.z1, d.mainType, d.color, true);
   else placeBrick([d.x, d.y, d.z], d.lengthCells, d.orientation, d.mainType, d.studded, true, d.color);
 }
+// The one fixed cell coordinate identifying a captured piece, usable to
+// remove it again later regardless of whatever new id a fresh
+// restoreBrickFromCapture call happens to assign it — a redo of a
+// removal needs exactly this, since re-removing "by id" would break the
+// moment the piece had been restored (and thus re-created under a
+// different id) even once.
+function firstCellOfCapture(d) {
+  if (d.isRoofBlock) return [d.x0, Math.min(d.yLow, d.yHigh), d.z0];
+  if (d.isSlabBlock) return [d.x0, d.y, d.z0];
+  return [d.x, d.y, d.z];
+}
 
 /* ---------------- Parts list (Briqs only, never Deko) ---------------- */
 // A materials count of exactly what's actually been placed — grouped by
@@ -7278,6 +7475,12 @@ document.getElementById('partsListModal').addEventListener('click', (e) => {
 // undoing, or the autosave timer, so loading a big build doesn't turn
 // into a wall of noise.
 let soundEnabled = true;
+const FREE_MODE_KEY = 'briqsite_free_mode_v1';
+let freeMode = false;
+function setFreeMode(v) {
+  freeMode = !!v;
+  try { localStorage.setItem(FREE_MODE_KEY, freeMode ? '1' : '0'); } catch (e) { /* best-effort */ }
+}
 // A tiny log of which sound effect actually fired, purely so the test
 // harness can verify the ground-vs-stacked (and place-vs-remove)
 // DECISION at each call site — the audio graph itself is separately
@@ -7852,7 +8055,7 @@ let tutorialWaitingFor = null;
 // on is already a harmless no-op without needing to be hard-disabled).
 const TUTORIAL_MANAGED_BUTTON_IDS = [
   'modeToggleBtn', 'typeMenuBtn', 'colorBtnInline',
-  'undoBtn', 'achievementsBtn', 'shareBtn', 'fullscreenBtn', 'infoBtn', 'menuBtn',
+  'undoBtn', 'redoBtn', 'achievementsBtn', 'shareBtn', 'fullscreenBtn', 'infoBtn', 'menuBtn',
   'toolPlace', 'toolRemove', 'toolPaint', 'toolCopy',
 ];
 function tutorialDoneBefore() {
@@ -8173,6 +8376,24 @@ document.getElementById('soundToggleBtn').addEventListener('click', () => {
   btn.classList.toggle('active', soundEnabled);
   btn.innerHTML = soundEnabled ? '🔊<small>On</small>' : '🔇<small>Off</small>';
 });
+document.getElementById('freeModeToggleBtn').addEventListener('click', () => {
+  setFreeMode(!freeMode);
+  const btn = document.getElementById('freeModeToggleBtn');
+  btn.classList.toggle('active', freeMode);
+  btn.innerHTML = freeMode ? '🧱<small>On</small>' : '🧱<small>Off</small>';
+});
+// Restore whatever Free Mode choice was last made — off by default,
+// matching the normal, more constrained building rules, unless the
+// person explicitly turned it on before.
+(function restoreFreeMode() {
+  let saved = null;
+  try { saved = localStorage.getItem(FREE_MODE_KEY); } catch (e) { /* best-effort */ }
+  const v = saved === '1';
+  setFreeMode(v);
+  const btn = document.getElementById('freeModeToggleBtn');
+  btn.classList.toggle('active', v);
+  btn.innerHTML = v ? '🧱<small>On</small>' : '🧱<small>Off</small>';
+})();
 document.getElementById('sensitivitySlider').addEventListener('input', (e) => {
   setLookSensitivity(Number(e.target.value) / 100);
 });
@@ -8446,11 +8667,22 @@ function getCopyPreviewForAim(entries, rawX, rawZ) {
   return copyPreviewCache;
 }
 function resolveCopyPasteAnchor(entries, rawX, rawZ) {
-  if (computeCopyPasteRestY(entries, rawX, rawZ) === 0) return { x: rawX, z: rawZ };
+  // The world ground and every real wall type share the exact same 25cm
+  // module (crossCells 5) — Floor included — so pasting should always land on that one shared grid, the same
+  // way ordinary building on bare ground now always does too. Landing
+  // directly on the ground used to skip grid-snapping entirely here,
+  // using whatever fine single-cell (5cm) position the raw aim happened
+  // to be at — the exact "versetzt" (off-grid) pasting this experimental
+  // version is meant to eliminate. A genuinely mixed-type clipboard (or
+  // one without a single uniform ordinary-Briq type) falls back to
+  // WS25's own crossCells specifically — still correct for the shared
+  // world grid, not an arbitrary guess — rather than each entry's own
+  // type, since Platte pieces are grid-snapped by their own placement
+  // flow already and a roof panel's own smaller module is a separate,
+  // deliberately un-unified case.
   const allPlainBricks = entries.every((e) => !e.isSlabBlock && !e.isRoofBlock);
   const types = new Set(entries.map((e) => e.mainType));
-  if (!allPlainBricks || types.size !== 1) return { x: rawX, z: rawZ };
-  const crossCells = BRIQ_CATALOG[[...types][0]].crossCells;
+  const crossCells = (allPlainBricks && types.size === 1) ? BRIQ_CATALOG[[...types][0]].crossCells : BRIQ_CATALOG.WS25.crossCells;
   return { x: Math.round(rawX / crossCells) * crossCells, z: Math.round(rawZ / crossCells) * crossCells };
 }
 function entryCellsAt(e, dx, dy, dz) {
@@ -8646,7 +8878,24 @@ function pasteClipboardAt(tx, tz) {
     if (id !== null && id !== false) placedIds.push(id);
   }
   if (placedIds.length > 0) {
-    pushUndo(() => { for (const id of placedIds) removeBrickById(id); });
+    // A redo re-pastes the SAME clipboard at the SAME spot, which
+    // creates a fresh batch of ids each time (never the same ones
+    // twice) — this shared "state" object is what lets a SUBSEQUENT
+    // undo keep removing whichever ids are actually current, across
+    // as many undo/redo cycles as the person wants to bounce through.
+    const state = { ids: placedIds };
+    pushUndo(
+      () => { for (const id of state.ids) removeBrickById(id); },
+      () => {
+        const newIds = [];
+        for (const e of clipboard.entries) {
+          const id = pasteEntryAt(e, tx, restY, tz);
+          if (id !== null && id !== false) newIds.push(id);
+        }
+        state.ids = newIds;
+        playPlaceSound(false);
+      }
+    );
     playPlaceSound(false); // pasting a whole group reads as snapping a prefab piece into place, not a single heavy drop
     recordBriqsPlaced(placedIds.length);
     unlockAchievement('first_copy');
@@ -9136,7 +9385,14 @@ function resolveRoofSlopeAxis(x0, x1, z0, z1) {
 }
 function doRoofFillWithUndo(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material) {
   const id = placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, false);
-  if (id !== null) { pushUndo(() => removeBrickAt(bricks.get(id).cells[0])); playPlaceSound(Math.min(yLow, yHigh) === 0); }
+  if (id !== null) {
+    const cell = [x0, Math.min(yLow, yHigh), z0];
+    pushUndo(
+      () => removeBrickAt(cell),
+      () => { placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, true); playPlaceSound(Math.min(yLow, yHigh) === 0); }
+    );
+    playPlaceSound(Math.min(yLow, yHigh) === 0);
+  }
   return id !== null ? 1 : 0;
 }
 // Same two-corner gesture as the Platte tool, but BOTH corners' heights
@@ -9267,7 +9523,24 @@ function commitDragRow() {
     if (placeBrick(slot.anchor, slot.len, holdSession.axis, mainType, studded)) placedIds.push(nextBrickId - 1);
   }
   if (placedIds.length) {
-    pushUndo(() => { for (const id of placedIds) removeBrickById(id); });
+    // Captured now, not read live later — mainType/studded (and which
+    // slots were actually valid) could easily have changed by the time
+    // a much later redo runs, but a redo must always reproduce this
+    // EXACT row again, not whatever happens to be currently selected.
+    const capAxis = holdSession.axis, capMainType = mainType, capStudded = studded, capY = holdSession.y;
+    const state = { ids: placedIds };
+    pushUndo(
+      () => { for (const id of state.ids) removeBrickById(id); },
+      () => {
+        const newIds = [];
+        for (const slot of slots) {
+          if (!slot.valid) continue;
+          if (placeBrick(slot.anchor, slot.len, capAxis, capMainType, capStudded)) newIds.push(nextBrickId - 1);
+        }
+        state.ids = newIds;
+        playPlaceSound(capY === 0);
+      }
+    );
     playPlaceSound(holdSession.y === 0);
     recordBriqsPlaced(placedIds.length);
     notifyTutorial('build');
@@ -10153,6 +10426,7 @@ document.getElementById('resetBtn').addEventListener('click', () => {
   showConfirm('Start over?', 'Start over? This clears every Briq and Deko object you\u2019ve placed and can\u2019t be undone.', resetGame);
 });
 document.getElementById('undoBtn').addEventListener('click', undoLast);
+document.getElementById('redoBtn').addEventListener('click', redoLast);
 
 // Import: unchanged file-based restore. Export now lives earlier in this
 // section (openExportModal/downloadExport/shareExport), wired to the

@@ -1056,7 +1056,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v3.13</div>
+  <div id="versionLabel">v3.14</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -3728,58 +3728,71 @@ function makeKlavier(x, z) {
   g.userData.collideRadius = 0.75;
   return g;
 }
+// Wall-mounted: the group's own origin (y=0 locally) IS the mounting
+// point on the wall's surface, set directly from wherever the player
+// aims — unlike floor items, there's no separate "lift to eye height"
+// offset baked into the geometry any more, since the wall hit point
+// itself already supplies whatever height was aimed at.
 function makeWandbild(x, z) {
   const g = new THREE.Group();
   const frameMat = sharedDecorMat({ color: 0x6b4226, roughness: 0.7 });
   const canvasMat = sharedDecorMat({ color: 0x7ba7bd, roughness: 0.9 });
   const frame = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.45, 0.04), frameMat);
-  frame.position.y = 1.4;
   frame.castShadow = true;
   g.add(frame);
   const canvas = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.36, 0.02), canvasMat);
-  canvas.position.set(0, 1.4, 0.025);
+  canvas.position.set(0, 0, 0.025);
   g.add(canvas);
   g.position.set(x, 0, z);
   g.userData.collideRadius = 0.35;
   return g;
 }
 
-// ===== New lamp/light additions (indoor) =====// ===== New lamp/light additions (indoor) =====
+// ===== New lamp/light additions (indoor) =====
+// The group's own origin is the mount point (the ceiling's underside,
+// where the cord's own TOP end actually attaches) — every Y offset
+// below is shifted down by the cord's full 0.4m length compared to the
+// original version of this model, which had the origin sitting at the
+// cord's BOTTOM instead, leaving half the cord poking up into the
+// ceiling brick rather than hanging entirely below it.
 function makeDeckenlampe(x, z) {
   const g = new THREE.Group();
   const cordMat = sharedDecorMat({ color: 0x2a2a2a, roughness: 0.5, metalness: 0.3 });
   const shadeMat = sharedDecorMat({ color: 0xe8dcc0, roughness: 0.7 });
   const bulbMat = sharedDecorMat({ color: 0xfff3c4, emissive: 0xfff3c4, emissiveIntensity: 0.8, roughness: 0.4 });
   const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.4, 6), cordMat);
-  cord.position.y = 0.2;
+  cord.position.y = -0.2;
   g.add(cord);
   const shade = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.16, 12), shadeMat);
-  shade.position.y = -0.02;
+  shade.position.y = -0.42;
   shade.rotation.x = Math.PI;
   shade.castShadow = true;
   g.add(shade);
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 10), bulbMat);
-  bulb.position.y = -0.08;
+  bulb.position.y = -0.48;
   g.add(bulb);
   g.position.set(x, 0, z);
   g.userData.collideRadius = 0.2;
   return g;
 }
+// Same fix as makeDeckenlampe's own comment: origin shifted down by the
+// cord's full 0.3m length so its TOP (the mount point) sits exactly at
+// the ceiling surface, not halfway up inside it.
 function makeKronleuchter(x, z) {
   const g = new THREE.Group();
   const metalMat = sharedDecorMat({ color: 0xcaa456, roughness: 0.4, metalness: 0.7 });
   const candleMat = sharedDecorMat({ color: 0xfff3c4, emissive: 0xfff3c4, emissiveIntensity: 0.7, roughness: 0.5 });
   const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.3, 6), metalMat);
-  cord.position.y = 0.15;
+  cord.position.y = -0.15;
   g.add(cord);
   const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.03, 16), metalMat);
-  ring.position.y = -0.02;
+  ring.position.y = -0.32;
   ring.castShadow = true;
   g.add(ring);
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
     const candle = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.08, 6), candleMat);
-    candle.position.set(Math.cos(a) * 0.2, 0.03, Math.sin(a) * 0.2);
+    candle.position.set(Math.cos(a) * 0.2, -0.27, Math.sin(a) * 0.2);
     g.add(candle);
   }
   g.position.set(x, 0, z);
@@ -3809,38 +3822,45 @@ function makeTischlampe(x, z) {
   g.userData.collideRadius = 0.15;
   return g;
 }
+// Wall-mounted (see makeWandbild's own comment on why the old fixed
+// eye-height offset is gone).
 function makeWandlampe(x, z) {
   const g = new THREE.Group();
   const mountMat = sharedDecorMat({ color: 0x3a3a3d, roughness: 0.5, metalness: 0.5 });
   const glassMat = sharedDecorMat({ color: 0xfff3c4, emissive: 0xfff3c4, emissiveIntensity: 0.65, roughness: 0.4, transparent: true, opacity: 0.85 });
   const mount = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.06), mountMat);
-  mount.position.set(0, 1.5, 0);
   mount.castShadow = true;
   g.add(mount);
   const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.12, 8), mountMat);
-  arm.position.set(0, 1.5, 0.08);
+  arm.position.set(0, 0, 0.08);
   arm.rotation.x = Math.PI / 2;
   g.add(arm);
   const glass = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 10), glassMat);
-  glass.position.set(0, 1.5, 0.16);
+  glass.position.set(0, 0, 0.16);
   g.add(glass);
   g.position.set(x, 0, z);
   g.userData.collideRadius = 0.15;
   return g;
 }
+// Wall-mounted, same as makeWandbild/makeWandlampe's own comments: the
+// group's own origin is the mounting point on the wall, wherever height
+// was actually aimed at, with everything hanging from there instead of
+// a fixed absolute height. Also nudged 0.03m out along local +Z (the
+// wall's own outward direction) so the wire and bulbs sit just proud of
+// the wall's face rather than half-embedded in it.
 function makeLichterkette(x, z) {
   const g = new THREE.Group();
   const wireMat = sharedDecorMat({ color: 0x2a2a2a, roughness: 0.6 });
   const bulbMat = sharedDecorMat({ color: 0xffe08a, emissive: 0xffcf5c, emissiveIntensity: 0.75, roughness: 0.5 });
   const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 1.4, 6), wireMat);
   wire.rotation.z = Math.PI / 2;
-  wire.position.y = 1.6;
+  wire.position.set(0, 0, 0.03);
   g.add(wire);
   for (let i = 0; i < 7; i++) {
     const t = i / 6;
     const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), bulbMat);
     const sag = Math.sin(t * Math.PI) * 0.12;
-    bulb.position.set(-0.7 + t * 1.4, 1.6 - sag - 0.03, 0);
+    bulb.position.set(-0.7 + t * 1.4, -sag - 0.03, 0.03);
     g.add(bulb);
   }
   g.position.set(x, 0, z);
@@ -3849,22 +3869,23 @@ function makeLichterkette(x, z) {
 }
 
 // ===== New lamp/light additions (outdoor) =====
+// Same fix again: origin shifted down by the hook's full 0.2m length.
 function makeLaterneHaengend(x, z) {
   const g = new THREE.Group();
   const metalMat = sharedDecorMat({ color: 0x2e2e2e, roughness: 0.5, metalness: 0.5 });
   const glassMat = sharedDecorMat({ color: 0xffcf7a, emissive: 0xffb347, emissiveIntensity: 0.7, roughness: 0.4, transparent: true, opacity: 0.8 });
   const hook = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.2, 6), metalMat);
-  hook.position.y = 0.1;
+  hook.position.y = -0.1;
   g.add(hook);
   const frameTop = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 8), metalMat);
-  frameTop.position.y = -0.01;
+  frameTop.position.y = -0.21;
   g.add(frameTop);
   const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.16, 8), glassMat);
-  glass.position.y = -0.1;
+  glass.position.y = -0.3;
   glass.castShadow = true;
   g.add(glass);
   const frameBottom = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.02, 8), metalMat);
-  frameBottom.position.y = -0.19;
+  frameBottom.position.y = -0.39;
   g.add(frameBottom);
   g.position.set(x, 0, z);
   g.userData.collideRadius = 0.15;
@@ -4795,15 +4816,15 @@ const DECOR_CATALOG = {
   barhocker: { label: 'Bar Stool', build: makeBarhocker, randomRot: false, minSpacing: 0.35, cat: 'furniture' },
   zimmerpflanze: { label: 'Potted Plant', build: makeZimmerpflanze, randomRot: true, minSpacing: 0.3, cat: 'furniture' },
   klavier: { label: 'Piano', build: makeKlavier, randomRot: false, minSpacing: 0.95, cat: 'furniture' },
-  wandbild: { label: 'Wall Art', build: makeWandbild, randomRot: false, minSpacing: 0.4, cat: 'furniture' },
+  wandbild: { label: 'Wall Art', build: makeWandbild, randomRot: false, minSpacing: 0.4, cat: 'furniture', mount: 'wall' },
   // New lamp/light additions (indoor)
-  deckenlampe: { label: 'Ceiling Lamp', build: makeDeckenlampe, randomRot: false, minSpacing: 0.3, cat: 'light' },
-  kronleuchter: { label: 'Chandelier', build: makeKronleuchter, randomRot: false, minSpacing: 0.4, cat: 'light' },
+  deckenlampe: { label: 'Ceiling Lamp', build: makeDeckenlampe, randomRot: false, minSpacing: 0.3, cat: 'light', mount: 'ceiling' },
+  kronleuchter: { label: 'Chandelier', build: makeKronleuchter, randomRot: false, minSpacing: 0.4, cat: 'light', mount: 'ceiling' },
   tischlampe: { label: 'Table Lamp', build: makeTischlampe, randomRot: false, minSpacing: 0.25, cat: 'light' },
-  wandlampe: { label: 'Wall Sconce', build: makeWandlampe, randomRot: false, minSpacing: 0.25, cat: 'light' },
-  lichterkette: { label: 'String Lights', build: makeLichterkette, randomRot: false, minSpacing: 0.8, cat: 'light' },
+  wandlampe: { label: 'Wall Sconce', build: makeWandlampe, randomRot: false, minSpacing: 0.25, cat: 'light', mount: 'wall' },
+  lichterkette: { label: 'String Lights', build: makeLichterkette, randomRot: false, minSpacing: 0.8, cat: 'light', mount: 'wall' },
   // New lamp/light additions (outdoor)
-  laterne_haengend: { label: 'Hanging Lantern', build: makeLaterneHaengend, randomRot: false, minSpacing: 0.25, cat: 'light' },
+  laterne_haengend: { label: 'Hanging Lantern', build: makeLaterneHaengend, randomRot: false, minSpacing: 0.25, cat: 'light', mount: 'ceiling' },
   poolbeleuchtung: { label: 'Pool Light', build: makePoolbeleuchtung, randomRot: false, minSpacing: 0.25, cat: 'light' },
   bodenstrahler: { label: 'Ground Spotlight', build: makeBodenstrahler, randomRot: true, minSpacing: 0.2, cat: 'light' },
   doppellaterne: { label: 'Double Lamppost', build: makeDoppellaterne, randomRot: false, minSpacing: 0.4, cat: 'light' },
@@ -4888,13 +4909,30 @@ const LIT_DECOR_TYPES = {
   solarlampe: { color: 0xffe9c2, intensity: 0.9, distance: 2.8, height: 0.75, flicker: false },
   feuerschale: { color: 0xff7a35, intensity: 1.5, distance: 4, height: 0.4, flicker: true },
   // New indoor lamps
-  deckenlampe: { color: 0xfff0c2, intensity: 1.3, distance: 4, height: -0.08, flicker: false },
-  kronleuchter: { color: 0xfff0c2, intensity: 1.8, distance: 5, height: 0.03, flicker: false },
+  // height values updated to match the corrected geometry above (the
+  // cord/hook now hangs entirely below the mount point instead of
+  // straddling it) — each one still points exactly at its own bulb/
+  // candle/glass, just shifted down by the same amount the model itself
+  // shifted.
+  // distance/intensity increased so these actually fill a typical room
+  // (previously in the same range as small accent lights like a table
+  // lamp, even though they're meant to be a room's MAIN light source).
+  deckenlampe: { color: 0xfff0c2, intensity: 1.6, distance: 6, height: -0.48, flicker: false },
+  kronleuchter: { color: 0xfff0c2, intensity: 2.0, distance: 7, height: -0.27, flicker: false },
   tischlampe: { color: 0xffe9c2, intensity: 0.8, distance: 2.5, height: 0.32, flicker: false },
-  wandlampe: { color: 0xffe9c2, intensity: 0.9, distance: 2.8, height: 1.5, flicker: false },
-  lichterkette: { color: 0xffe08a, intensity: 0.7, distance: 2.5, height: 1.5, flicker: false },
+  // height: 0 now — the geometry's own bulb sits AT the placement point
+  // itself (see makeWandlampe's own comment), since that point is
+  // wherever on the wall the player actually aimed, not a fixed
+  // eye-height lift from a ground-standing origin like before.
+  wandlampe: { color: 0xffe9c2, intensity: 0.9, distance: 2.8, height: 0, flicker: false },
+  // height corrected to match the new wall-mount geometry (was still
+  // the stale absolute-height value from before lichterkette became a
+  // wall item, left over by mistake — the string itself now hangs at
+  // roughly the mount point, not 1.5m above whatever y was passed in).
+  // -0.15 matches the middle bulb's own sag exactly (see makeLichterkette).
+  lichterkette: { color: 0xffe08a, intensity: 0.7, distance: 2.5, height: -0.15, flicker: false },
   // New outdoor lamps
-  laterne_haengend: { color: 0xffcf7a, intensity: 1.2, distance: 3.5, height: -0.1, flicker: true },
+  laterne_haengend: { color: 0xffcf7a, intensity: 1.4, distance: 5, height: -0.3, flicker: true },
   poolbeleuchtung: { color: 0x6fe0f0, intensity: 1.4, distance: 3, height: 0.02, flicker: false },
   bodenstrahler: { color: 0xfff3c4, intensity: 0.9, distance: 2.2, height: 0.05, flicker: false },
   doppellaterne: { color: 0xffdca8, intensity: 2.0, distance: 6.5, height: 1.75, flicker: false },
@@ -4956,6 +4994,7 @@ function updateDecorLightFlicker(t) {
 function addDecor(type, x, z, rotY, y, force, scale) {
   const def = DECOR_CATALOG[type];
   if (!def) return false;
+  const mount = def.mount || 'floor';
   const cx = snapDecorCoord(x), cz = snapDecorCoord(z);
   const cy = y || 0;
   const sc = scale || 1;
@@ -4964,14 +5003,22 @@ function addDecor(type, x, z, rotY, y, force, scale) {
     // already there, AT THAT SAME HEIGHT — a Platte's own top surface is
     // exactly where Deko is meant to go, so only the cell the object
     // would actually occupy matters, not whatever else exists below it.
-    const cellX = Math.round(cx / CELL_M), cellZ = Math.round(cz / CELL_M), cellY = Math.round(cy / CELL_M);
-    if (occupancy.has(key(cellX, cellY, cellZ))) return false;
+    // Deliberately skipped for wall (and later ceiling) mounts: the
+    // whole point there is sitting flush against an existing brick's own
+    // face, which this same check would otherwise misread as "already
+    // occupied" and reject every single wall placement outright.
+    if (mount === 'floor') {
+      const cellX = Math.round(cx / CELL_M), cellZ = Math.round(cz / CELL_M), cellY = Math.round(cy / CELL_M);
+      if (occupancy.has(key(cellX, cellY, cellZ))) return false;
+    }
     // Enforce a minimum distance to any existing Deko object at the SAME
     // height — this is what stops a single tap (which can still fire the
     // hold-to-repeat loop for a couple of frames even on a short press)
     // from dropping several trees right on top of each other. Scaled up
     // for a bigger-size placement, since a Large palm needs more real
-    // clearance than a Small one.
+    // clearance than a Small one. Applies to wall mounts too, so two wall
+    // lamps can't be crammed onto the exact same spot on a wall any more
+    // than two potted plants could occupy the same spot on the floor.
     const minSpacing = (def.minSpacing || 0.35) * sc;
     for (const d of placedDecor) {
       if (Math.abs((d.y || 0) - cy) < CELL_M && Math.hypot(d.x - cx, d.z - cz) < minSpacing) return false;
@@ -4983,7 +5030,7 @@ function addDecor(type, x, z, rotY, y, force, scale) {
   if (sc !== 1) mesh.scale.setScalar(sc);
   scene.add(mesh);
   const light = makeDecorLight(type, cx, cz, cy, sc);
-  placedDecor.push({ type, x: cx, z: cz, y: cy, rotY: mesh.rotation.y, mesh, light, scale: sc });
+  placedDecor.push({ type, x: cx, z: cz, y: cy, rotY: mesh.rotation.y, mesh, light, scale: sc, mount });
   return true;
 }
 function removeDecorAt(mesh) {
@@ -6966,9 +7013,21 @@ function raycastGround() {
 // Deko is allowed to land on a Platte's own top surface too (a rooftop
 // terrace, a garden on a floor slab, ...) — but deliberately NOT on top
 // of an ordinary WS20/WS25 Briq, which stays reserved for building.
-function raycastGroundOrSlabTop() {
+// mount === 'wall' or 'ceiling' both aim at ANY Briq's own face (not
+// just slabs) — a wall item can hang on the side of an ordinary
+// upright wall brick, and a ceiling item on the underside of one, just
+// as well as a taller one, whichever face actually gets aimed at.
+// Every other mount (currently just 'floor') keeps the exact original
+// behaviour: the ground plane, plus a Platte's own TOP face — never an
+// ordinary wall brick's tiny top face, which was never meant to be a
+// "stand something on it" surface for potted plants and the like.
+function raycastDecorSurface(mount) {
   const ndc = (mode === 'fp' && touchUI) ? { x: 0, y: 0 } : aimNDC;
   raycaster.setFromCamera(ndc, camera);
+  if (mount === 'wall' || mount === 'ceiling') {
+    const hits = raycaster.intersectObjects(brickMeshes, false);
+    return hits[0] || null;
+  }
   const slabTargets = brickMeshes.filter((m) => {
     const b = bricks.get(m.userData.brickId);
     return b && b.isSlabBlock;
@@ -6976,6 +7035,10 @@ function raycastGroundOrSlabTop() {
   const hits = raycaster.intersectObjects([ground, ...slabTargets], false);
   return hits[0] || null;
 }
+// Kept under its old name too — it's now just the floor-only case, but a
+// couple of other call sites (and existing tests) still reach for it
+// directly by this name.
+function raycastGroundOrSlabTop() { return raycastDecorSurface('floor'); }
 
 let currentInvalidReason = '';
 const aimHint = document.getElementById('aimHint');
@@ -7216,25 +7279,89 @@ const decorRemoveHighlight = new THREE.Mesh(
   new THREE.CylinderGeometry(0.3, 0.3, 0.05, 16),
   ghostMatInvalid
 );
+// The wall-normal a Briq face is hit with determines everything about a
+// wall placement: which way the item ends up facing (computed here) and
+// which of x/y/z stays pinned to that exact surface vs. free to slide
+// along it. Returns null for anything that isn't a genuinely vertical-ish
+// face (top/bottom faces are for the floor/ceiling cases instead).
+function computeWallYawFromNormal(n) {
+  if (Math.abs(n.y) >= 0.5) return null;
+  // Three.js: rotation.y = θ carries a shape's own local +Z axis to the
+  // world direction (sinθ, 0, cosθ) — every wall-mount model here (see
+  // makeWandbild/makeWandlampe's own comments) was built with its
+  // visible face pointing along local +Z, so θ = atan2(nx, nz) is exactly
+  // the rotation that turns that local +Z to match the wall's own
+  // outward-pointing normal, i.e. facing away from the wall into the room.
+  return Math.atan2(n.x, n.z);
+}
+function updateWallDecorPlaceGhost() {
+  const hit = raycastDecorSurface('wall');
+  if (!hit) return;
+  const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+  const rotY = computeWallYawFromNormal(n);
+  if (rotY === null) return; // a roughly horizontal (top/bottom) face isn't a wall
+  const b = bricks.get(hit.object.userData.brickId);
+  if (!b) return;
+  const x = snapDecorCoord(hit.point.x), z = snapDecorCoord(hit.point.z);
+  const y = snapDecorCoord(hit.point.y);
+  currentDecorPos = { x, z, y, blocked: false, rotY, wall: true };
+  const tmpl = getPlaceGhostFor(decorType);
+  tmpl.position.set(x, y, z);
+  tmpl.scale.setScalar(decorSizeByType[decorType] || 1);
+  tmpl.rotation.y = rotY;
+  tmpl.traverse((o) => { if (o.isMesh) o.material = ghostMatValid; });
+  scene.add(tmpl);
+  decorGhostMesh = tmpl;
+}
+// Every ceiling-hung model here (deckenlampe, kronleuchter,
+// laterne_haengend) was already built with its own group origin AT the
+// attachment point and everything visible hanging below it — unlike
+// the wall items, no geometry surgery was needed for these at all, so
+// placement only needs to find a genuine underside and use its own
+// facing angle as-is (all three happen to be rotationally symmetric,
+// so which way they "face" was never visually meaningful to begin with).
+function updateCeilingDecorPlaceGhost() {
+  const hit = raycastDecorSurface('ceiling');
+  if (!hit) return;
+  const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+  if (n.y > -0.5) return; // only a genuine underside (downward-facing) counts as a ceiling
+  const b = bricks.get(hit.object.userData.brickId);
+  if (!b) return;
+  const x = snapDecorCoord(hit.point.x), z = snapDecorCoord(hit.point.z);
+  const y = snapDecorCoord(hit.point.y);
+  currentDecorPos = { x, z, y, blocked: false, rotY: 0, ceiling: true };
+  const tmpl = getPlaceGhostFor(decorType);
+  tmpl.position.set(x, y, z);
+  tmpl.scale.setScalar(decorSizeByType[decorType] || 1);
+  tmpl.rotation.y = 0;
+  tmpl.traverse((o) => { if (o.isMesh) o.material = ghostMatValid; });
+  scene.add(tmpl);
+  decorGhostMesh = tmpl;
+}
 function updateDecorAimAndGhost() {
-  const hit = raycastGroundOrSlabTop();
   currentDecorPos = null;
   currentDecorRemoveTarget = null;
   if (decorGhostMesh) { scene.remove(decorGhostMesh); decorGhostMesh = null; }
-  if (!hit) return;
-  // A hit on the slab's TOP face means "stand on it" (place at its
-  // surface height); a hit on any other face of it (a side, while
-  // aiming past its edge) isn't a valid Deko surface at all.
-  const isSlabHit = hit.object !== ground;
-  let hitY = 0;
-  if (isSlabHit) {
-    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
-    if (n.y <= 0) return; // only the top face counts as standable ground
-    const b = bricks.get(hit.object.userData.brickId);
-    if (!b) return;
-    hitY = (b.footprint.y1 + 1) * CELL_M;
-  }
+
   if (tool === 'place') {
+    const def = DECOR_CATALOG[decorType];
+    const mount = (def && def.mount) || 'floor';
+    if (mount === 'wall') { updateWallDecorPlaceGhost(); return; }
+    if (mount === 'ceiling') { updateCeilingDecorPlaceGhost(); return; }
+    const hit = raycastDecorSurface('floor');
+    if (!hit) return;
+    // A hit on the slab's TOP face means "stand on it" (place at its
+    // surface height); a hit on any other face of it (a side, while
+    // aiming past its edge) isn't a valid Deko surface at all.
+    const isSlabHit = hit.object !== ground;
+    let hitY = 0;
+    if (isSlabHit) {
+      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+      if (n.y <= 0) return; // only the top face counts as standable ground
+      const b = bricks.get(hit.object.userData.brickId);
+      if (!b) return;
+      hitY = (b.footprint.y1 + 1) * CELL_M;
+    }
     const x = snapDecorCoord(hit.point.x), z = snapDecorCoord(hit.point.z);
     const cellX = Math.round(x / CELL_M), cellZ = Math.round(z / CELL_M), cellY = Math.round(hitY / CELL_M);
     const blocked = occupancy.has(key(cellX, cellY, cellZ));
@@ -7247,13 +7374,60 @@ function updateDecorAimAndGhost() {
     scene.add(tmpl);
     decorGhostMesh = tmpl;
   } else {
-    // Remove tool: highlight whichever placed decoration (not the ambient
-    // random ones) is nearest the aim point, preferring one at the SAME
-    // height as what's under the crosshair right now (ground vs a
-    // Platte's surface) so items stacked at different levels don't
-    // interfere with each other.
+    // Remove tool: a wall- or ceiling-mounted item can only ever be
+    // found by first checking whether the crosshair is actually resting
+    // on a Briq face that ISN'T a plain top (floor-standable) surface
+    // right now — searched by genuine 3D distance since these items'
+    // own height varies continuously rather than snapping to one of a
+    // few fixed floor/Platte levels. This is checked FIRST and
+    // separately from the existing floor/slab search below, rather than
+    // folding it into that search, so the floor search's own logic (and
+    // its exact matching behaviour for every Deko placed before wall-
+    // and ceiling-mounting existed) stays completely untouched either way.
+    const wallOrCeilingHit = raycastDecorSurface('wall');
+    if (wallOrCeilingHit) {
+      const n = wallOrCeilingHit.face.normal.clone().transformDirection(wallOrCeilingHit.object.matrixWorld).round();
+      const wantMount = Math.abs(n.y) < 0.5 ? 'wall' : (n.y < -0.5 ? 'ceiling' : null);
+      if (wantMount) {
+        let best = null, bestDist = 0.4;
+        for (const d of placedDecor) {
+          if (d.mount !== wantMount) continue;
+          const dist = Math.hypot(d.x - wallOrCeilingHit.point.x, (d.y || 0) - wallOrCeilingHit.point.y, d.z - wallOrCeilingHit.point.z);
+          if (dist < bestDist) { bestDist = dist; best = d; }
+        }
+        currentDecorRemoveTarget = best;
+        if (best) {
+          decorRemoveHighlight.position.set(best.x, (best.y || 0), best.z);
+          decorRemoveHighlight.scale.setScalar(best.scale || 1);
+          scene.add(decorRemoveHighlight);
+          decorGhostMesh = decorRemoveHighlight;
+        }
+        return;
+      }
+    }
+    const hit = raycastDecorSurface('floor');
+    if (!hit) return;
+    const isSlabHit = hit.object !== ground;
+    let hitY = 0;
+    if (isSlabHit) {
+      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+      if (n.y <= 0) return; // only the top face counts as standable ground
+      const b = bricks.get(hit.object.userData.brickId);
+      if (!b) return;
+      hitY = (b.footprint.y1 + 1) * CELL_M;
+    }
+    // Highlight whichever placed decoration (not the ambient random
+    // ones) is nearest the aim point, preferring one at the SAME height
+    // as what's under the crosshair right now (ground vs a Platte's
+    // surface) so items stacked at different levels don't interfere with
+    // each other. Wall and ceiling items are excluded here — they're
+    // searched separately above, by full 3D distance instead of this
+    // Y-filtered 2D one, since "same height as the floor/Platte under
+    // the crosshair" doesn't mean anything for something mounted on a
+    // wall or hanging from a ceiling.
     let best = null, bestDist = 0.4;
     for (const d of placedDecor) {
+      if (d.mount === 'wall' || d.mount === 'ceiling') continue;
       if (Math.abs((d.y || 0) - hitY) >= CELL_M) continue;
       const dist = Math.hypot(d.x - hit.point.x, d.z - hit.point.z);
       if (dist < bestDist) { bestDist = dist; best = d; }
@@ -7528,7 +7702,13 @@ function doDecorAction() {
   if (tool === 'place') {
     if (currentDecorPos && !currentDecorPos.blocked) {
       const size = decorSizeByType[decorType] || 1;
-      const ok = addDecor(decorType, currentDecorPos.x, currentDecorPos.z, decorRotation, currentDecorPos.y, false, size);
+      // Wall- and ceiling-mounted items always use the rotation the
+      // surface itself dictated (computed from the wall's own normal,
+      // or fixed at 0 for the rotationally-symmetric ceiling fixtures)
+      // instead of the player's own free-rotate value — a picture frame
+      // doesn't get to face sideways off its own wall.
+      const placeRotY = (currentDecorPos.wall || currentDecorPos.ceiling) ? currentDecorPos.rotY : decorRotation;
+      const ok = addDecor(decorType, currentDecorPos.x, currentDecorPos.z, placeRotY, currentDecorPos.y, false, size);
       if (ok) {
         const added = placedDecor[placedDecor.length - 1];
         // A mesh reference is how Deko objects are identified for
@@ -7538,7 +7718,7 @@ function doDecorAction() {
         // whichever mesh is actually the current one, across as many
         // undo/redo cycles as the person wants to bounce back and forth.
         const state = { mesh: added.mesh };
-        const capType = decorType, capX = currentDecorPos.x, capZ = currentDecorPos.z, capRotY = decorRotation, capY = currentDecorPos.y, capSize = size;
+        const capType = decorType, capX = currentDecorPos.x, capZ = currentDecorPos.z, capRotY = placeRotY, capY = currentDecorPos.y, capSize = size;
         pushUndo(
           () => removeDecorAt(state.mesh),
           () => {

@@ -1074,7 +1074,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v4.00</div>
+  <div id="versionLabel">v4.5</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -5249,6 +5249,56 @@ const bricks = new Map();          // brickId -> { mesh, cells:[[x,y,z]...] }
 let nextBrickId = 1;
 let totalPlaced = 0;
 
+// A secondary spatial index, parallel to `occupancy` above but keyed
+// per (x,z) COLUMN only, ignoring height entirely — mapping each column
+// to the set of brick ids whose footprint touches it at ANY height.
+// Some operations only ever care about a piece's horizontal footprint
+// (the Copy tool's own marking-rectangle highlight, in particular,
+// which needs "which Briqs sit inside this XZ rectangle, at any
+// height" — not a specific cell) — looking those up here instead of
+// scanning every single Briq in the whole build is what keeps that
+// fast on a large base, the same way `occupancy` already keeps
+// ordinary placement collision checks fast regardless of world size.
+// Maintained incrementally by whichever of the three placement
+// functions (placeBrick/placeSlabBlock/placeRoofBlock) just created a
+// new id, and torn back down by removeBrickById — never rebuilt from
+// scratch, so it stays cheap to keep updated no matter how big the
+// build already is.
+const columnIndex = new Map();     // packed (x,z) column key -> Set<brickId>
+// Packed numeric keys instead of "x_z" strings: these lookups run
+// hundreds of thousands of times per preview pass on a large clipboard,
+// and at that volume the per-lookup string allocation itself (plus the
+// garbage it leaves behind) was a measured, dominant cost — 32768/65536
+// give |x|,|z| headroom far beyond any reachable coordinate (CELL_BOUND
+// tops out at 6000 even at the maximum world size), while keeping the
+// packed value comfortably inside exact-integer range.
+function columnKey(x, z) { return (x + 32768) * 65536 + (z + 32768); }
+// Same idea for full (x,y,z) cell keys where a hot path owns BOTH ends
+// of the lookup (the preview's own virtual-support set) — the global
+// `occupancy` map deliberately keeps its established string keys, since
+// half the codebase reads/writes those and its lookups aren't the
+// bottleneck.
+function packedCellKey(x, y, z) { return columnKey(x, z) * 4096 + y; } // y < 4096 always: even a 100m height cap is only 2000 cells
+function registerColumnIndex(id, fp) {
+  for (let x = fp.x0; x <= fp.x1; x++) {
+    for (let z = fp.z0; z <= fp.z1; z++) {
+      const k = columnKey(x, z);
+      let set = columnIndex.get(k);
+      if (!set) { set = new Set(); columnIndex.set(k, set); }
+      set.add(id);
+    }
+  }
+}
+function unregisterColumnIndex(id, fp) {
+  for (let x = fp.x0; x <= fp.x1; x++) {
+    for (let z = fp.z0; z <= fp.z1; z++) {
+      const k = columnKey(x, z);
+      const set = columnIndex.get(k);
+      if (set) { set.delete(id); if (set.size === 0) columnIndex.delete(k); }
+    }
+  }
+}
+
 const brickMeshes = [];            // for raycasting removal / surfaces
 
 /* ----- UNIFIED GRID (as of v3.00) -----
@@ -5580,6 +5630,284 @@ const ghostMatInvalid = new THREE.MeshBasicMaterial({ color: 0xdb5b3f, transpare
 const ghostMatPaint = new THREE.MeshBasicMaterial({ color: 0x9b7fd6, transparent: true, opacity: 0.55, depthWrite: false });
 const edgeMat = new THREE.LineBasicMaterial({ color: 0x2c1c0e, transparent: true, opacity: 0.5 });
 
+/* ==========================================================
+   GPU INSTANCING POOLS (Part 1 of the instancing rework): the actual
+   plumbing for holding many Briqs' worth of transforms/colours in a
+   handful of shared THREE.InstancedMesh objects — one real GPU draw
+   call per pool instead of one per Briq. This part is deliberately
+   self-contained and NOT wired into placeBrick/removeBrickById yet:
+   every existing call site that reads a Briq's own `.mesh` (raycasting
+   for aiming/removal, the Copy/Remove-box tools' own highlight
+   overlays, wall/ceiling Deko mounting, ...) still assumes one real
+   Object3D per Briq, and rewriting all of those at the same time as
+   this is far riskier than doing it as its own, separately-tested next
+   step once this foundation itself is solid.
+
+   One pool per (mainType, lengthCells, studded, tinted) combination —
+   "tinted" is its own axis, not folded into the same pool as natural
+   wood, because a genuinely different base texture is needed for a
+   colour tint to read true rather than muddy (see getWoodMatTinted's
+   own comment) — untinted Briqs use the warm wood texture with a
+   neutral (no-op) instance colour, tinted ones use a neutral texture
+   with each Briq's own real colour driving the same per-instance
+   colour slot instead.
+
+   Deliberately does NOT (yet) cover the black edge outline every
+   ordinary Briq mesh currently also gets — LineSegments don't instance
+   the same straightforward way triangle meshes do, and it's an open
+   question whether instanced Briqs even keep that outline at all, or
+   get some other treatment instead. Left for a dedicated follow-up
+   once the core swap itself is proven out. */
+const INSTANCE_POOL_INITIAL_CAPACITY = 512;
+const instancePools = new Map(); // poolKey -> pool object (see makeInstancePool)
+function instancePoolKey(mainType, lengthCells, studded, tinted) {
+  return `${mainType}_${lengthCells}_${studded ? 1 : 0}_${tinted ? 1 : 0}`;
+}
+// A neutral (no-op) instance colour for the natural-wood pools — every
+// instance's own rendered colour is (base material colour) \u00d7 (instance
+// colour), so leaving this at pure white never alters the warm wood
+// texture's own true colour, exactly matching how an un-tinted Briq
+// looks today.
+const INSTANCE_COLOR_NEUTRAL = new THREE.Color(0xffffff);
+function makeInstanceMeshForPool(mainType, lengthCells, studded, tinted, capacity) {
+  const geo = studded ? getStuddedBrickGeo(mainType, lengthCells) : getBrickGeo(mainType, lengthCells);
+  const mat = tinted ? getWoodMatTinted(mainType, lengthCells, '#ffffff') : getWoodMat(mainType, lengthCells);
+  // getWoodMatTinted's own cache is keyed by (mainType,lengthCells,colour)
+  // — '#ffffff' is a completely ordinary, real cache entry there like
+  // any other specific colour would be, not a special "no tint" flag;
+  // the ACTUAL per-instance colour multiply is what does the real
+  // tinting work here, this is only the pool's shared BASE material.
+  const inst = new THREE.InstancedMesh(geo, mat, capacity);
+  inst.count = 0; // starts genuinely empty — capacity is just the buffer's own allocated ceiling, not how many instances actually exist yet
+  inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Briqs are added/removed continuously during normal building, not set once and left alone
+  inst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+  inst.instanceColor.setUsage(THREE.DynamicDrawUsage);
+  inst.castShadow = true;
+  inst.receiveShadow = true;
+  inst.userData.isInstancePool = true;
+  return inst;
+}
+function makeInstancePool(mainType, lengthCells, studded, tinted) {
+  const capacity = INSTANCE_POOL_INITIAL_CAPACITY;
+  const mesh = makeInstanceMeshForPool(mainType, lengthCells, studded, tinted, capacity);
+  return {
+    mainType, lengthCells, studded, tinted, capacity,
+    mesh,
+    idAtIndex: new Array(capacity).fill(null), // index -> brickId, for turning a raycast instanceId back into a Briq
+    indexOfId: new Map(),  // brickId -> index, for removal/updates
+  };
+}
+function getOrCreateInstancePool(mainType, lengthCells, studded, tinted) {
+  const k = instancePoolKey(mainType, lengthCells, studded, tinted);
+  let pool = instancePools.get(k);
+  if (!pool) {
+    pool = makeInstancePool(mainType, lengthCells, studded, tinted);
+    instancePools.set(k, pool);
+    scene.add(pool.mesh);
+  }
+  return pool;
+}
+// Doubles a pool's own capacity by building a fresh, bigger
+// InstancedMesh and copying every currently-live instance's own matrix
+// and colour across into it — the old mesh is removed from the scene
+// and its GPU buffers freed, so this never leaks a duplicate to render
+// against by mistake, however briefly.
+function growInstancePool(pool) {
+  const newCapacity = pool.capacity * 2;
+  const newMesh = makeInstanceMeshForPool(pool.mainType, pool.lengthCells, pool.studded, pool.tinted, newCapacity);
+  const m = new THREE.Matrix4();
+  const c = new THREE.Color();
+  for (let i = 0; i < pool.capacity; i++) {
+    if (pool.idAtIndex[i] === null) continue;
+    pool.mesh.getMatrixAt(i, m);
+    newMesh.setMatrixAt(i, m);
+    pool.mesh.getColorAt(i, c);
+    newMesh.setColorAt(i, c);
+  }
+  newMesh.count = pool.mesh.count;
+  newMesh.instanceMatrix.needsUpdate = true;
+  newMesh.instanceColor.needsUpdate = true;
+  scene.remove(pool.mesh);
+  pool.mesh.dispose();
+  pool.mesh = newMesh;
+  scene.add(newMesh);
+  const grownIdAtIndex = new Array(newCapacity).fill(null);
+  for (let i = 0; i < pool.capacity; i++) grownIdAtIndex[i] = pool.idAtIndex[i];
+  pool.idAtIndex = grownIdAtIndex;
+  pool.capacity = newCapacity;
+}
+// Claims a slot for a brand new instance — recycling happens
+// automatically via releaseInstanceSlot's own swap-and-shrink (the very
+// next allocation after a release naturally lands right back on
+// whatever slot `count` just shrank past), so this only ever needs to
+// hand out the next slot past the current live count, growing the pool
+// first if it's genuinely full.
+function allocateInstanceSlot(pool, brickId) {
+  if (pool.mesh.count >= pool.capacity) growInstancePool(pool);
+  const index = pool.mesh.count;
+  pool.mesh.count++;
+  pool.idAtIndex[index] = brickId;
+  pool.indexOfId.set(brickId, index);
+  return index;
+}
+// Releases a slot back to the pool for reuse — the LAST active slot is
+// moved into the freed one (a standard swap-and-shrink so `count` can
+// keep shrinking for genuinely trailing removals rather than
+// accumulating permanently-wasted holes), UNLESS the freed slot already
+// IS the last one, in which case there's nothing to move at all. Either
+// way, whichever brick id ends up at the reused index has its own
+// bookkeeping updated to match — callers that track "which index is my
+// Briq at" (see removeBrickById's own future use of this) must re-check
+// indexOfId after a release that might have moved a DIFFERENT Briq.
+function releaseInstanceSlot(pool, brickId) {
+  const index = pool.indexOfId.get(brickId);
+  if (index === undefined) return;
+  pool.indexOfId.delete(brickId);
+  const lastIndex = pool.mesh.count - 1;
+  if (index !== lastIndex) {
+    const m = new THREE.Matrix4();
+    const c = new THREE.Color();
+    pool.mesh.getMatrixAt(lastIndex, m);
+    pool.mesh.setMatrixAt(index, m);
+    pool.mesh.getColorAt(lastIndex, c);
+    pool.mesh.setColorAt(index, c);
+    const movedId = pool.idAtIndex[lastIndex];
+    pool.idAtIndex[index] = movedId;
+    if (movedId !== null) pool.indexOfId.set(movedId, index);
+  }
+  pool.idAtIndex[lastIndex] = null;
+  pool.mesh.count--;
+  pool.mesh.instanceMatrix.needsUpdate = true;
+  pool.mesh.instanceColor.needsUpdate = true;
+}
+function setInstanceTransform(pool, brickId, matrix) {
+  const index = pool.indexOfId.get(brickId);
+  if (index === undefined) return;
+  pool.mesh.setMatrixAt(index, matrix);
+  pool.mesh.instanceMatrix.needsUpdate = true;
+}
+function setInstanceColorFor(pool, brickId, colorHex) {
+  const index = pool.indexOfId.get(brickId);
+  if (index === undefined) return;
+  const c = colorHex ? new THREE.Color(colorHex) : INSTANCE_COLOR_NEUTRAL;
+  pool.mesh.setColorAt(index, c);
+  pool.mesh.instanceColor.needsUpdate = true;
+}
+// The reverse lookup a raycast hit needs: given the InstancedMesh that
+// was actually hit and which instance slot within it, which Briq id is
+// currently sitting there. Returns null for a stale/out-of-range hit
+// (shouldn't normally happen, but a raycast result computed one frame
+// and consumed a frame later, after something else changed the pool
+// in between, is exactly the kind of thing worth staying defensive
+// about rather than trusting blindly).
+function brickIdForInstanceHit(mesh, instanceId) {
+  for (const pool of instancePools.values()) {
+    if (pool.mesh === mesh) return pool.idAtIndex[instanceId] ?? null;
+  }
+  return null;
+}
+function clearAllInstancePools() {
+  for (const pool of instancePools.values()) {
+    scene.remove(pool.mesh);
+    pool.mesh.dispose();
+  }
+  instancePools.clear();
+}
+// A unified way to ask "which Briq id does this raycast hit actually
+// correspond to" regardless of whether it landed on an ordinary
+// individual mesh (roof/slab pieces, still one Object3D each) or a
+// shared InstancedMesh pool (every ordinary wall Briq, since this
+// instancing rework) — every place that used to read
+// hit.object.userData.brickId directly goes through this instead now.
+function brickIdFromHit(hit) {
+  if (!hit || !hit.object) return undefined;
+  if (hit.object.isInstancedMesh) { const found = brickIdForInstanceHit(hit.object, hit.instanceId); return found === null ? undefined : found; }
+  return hit.object.userData.brickId;
+}
+// The correct "world matrix" for a raycast hit's own face-normal maths.
+// An ordinary individual mesh's own matrixWorld works as always, but an
+// InstancedMesh's OWN matrixWorld is just wherever the whole shared
+// pool object sits (effectively identity — every pool is added directly
+// to the scene with no offset of its own) — the actual per-Briq
+// position/rotation lives in that SPECIFIC instance's own matrix
+// instead, which is what must be used here for a rotated instanced
+// Briq's face normal to transform into world space correctly.
+const hitMatrixScratch = new THREE.Matrix4();
+function worldMatrixForHit(hit) {
+  if (hit.object.isInstancedMesh) { hit.object.getMatrixAt(hit.instanceId, hitMatrixScratch); return hitMatrixScratch; }
+  return hit.object.matrixWorld;
+}
+// Every raycast that should be able to land on ANY Briq — ordinary wall
+// pieces via their shared instance pool, PLUS roof/slab pieces which
+// still each have their own individual mesh — needs both lists
+// combined: brickMeshes alone stopped including ordinary wall Briqs the
+// moment they moved into instance pools. Empty pools are skipped
+// entirely (an InstancedMesh with count 0 is harmless to raycast
+// against regardless, but there's no reason to hand the raycaster a
+// target that can never actually be hit).
+function allBrickRaycastTargets() {
+  const targets = brickMeshes.slice();
+  for (const pool of instancePools.values()) if (pool.mesh.count > 0) targets.push(pool.mesh);
+  return targets;
+}
+// A Briq's own world transform, regardless of which of the two storage
+// styles it actually uses — an individual mesh's own position/rotation
+// for roof/slab pieces, or its footprint/orientation recomputed the
+// same way placeBrick itself derived them for an instanced ordinary
+// wall Briq (which has no individual mesh of its own to just read this
+// off of directly any more).
+function getBrickWorldTransform(b) {
+  if (b.mesh) return { position: [b.mesh.position.x, b.mesh.position.y, b.mesh.position.z], rotationY: b.mesh.rotation.y };
+  const c = brickCenterWorld(b.footprint);
+  return { position: c, rotationY: b.orientation === 'z' ? Math.PI / 2 : 0 };
+}
+// Likewise for geometry — an individual mesh's own geometry for roof/
+// slab pieces, or the same shared cached geometry placeBrick itself
+// used for an instanced ordinary wall Briq.
+function getBrickGeometry(b) {
+  if (b.mesh) return b.mesh.geometry;
+  return b.studded ? getStuddedBrickGeo(b.mainType, b.lengthCells) : getBrickGeo(b.mainType, b.lengthCells);
+}
+// Recolouring an ALREADY-PLACED Briq (the Paint tool). An individual
+// mesh (roof/slab pieces) just gets handed a freshly resolved material,
+// exactly as before. An instanced ordinary wall Briq is trickier: since
+// tinted and untinted Briqs live in genuinely SEPARATE pools (different
+// base texture — see the pool system's own comment on why), switching
+// between "no colour" and "some colour" means moving the Briq to the
+// OTHER pool entirely, not just updating a colour value in place —
+// releasing its old slot, claiming a new one, and re-applying both its
+// transform and its new colour there. Switching between two DIFFERENT
+// actual colours (both non-null) stays within the same tinted pool, so
+// only the colour itself needs updating.
+function applyBrickColor(id, b, colorVal) {
+  if (b.pool) {
+    const wantTinted = !!colorVal;
+    if (wantTinted === b.pool.tinted) {
+      setInstanceColorFor(b.pool, id, colorVal);
+    } else {
+      const newPool = getOrCreateInstancePool(b.mainType, b.lengthCells, b.studded, wantTinted);
+      releaseInstanceSlot(b.pool, id);
+      allocateInstanceSlot(newPool, id);
+      const c = brickCenterWorld(b.footprint);
+      const m = new THREE.Matrix4();
+      m.makeRotationY(b.orientation === 'z' ? Math.PI / 2 : 0);
+      m.setPosition(c[0], c[1], c[2]);
+      setInstanceTransform(newPool, id, m);
+      setInstanceColorFor(newPool, id, colorVal);
+      b.pool = newPool;
+      if (b.mesh) b.mesh.material.map = newPool.mesh.material.map; // the pool switch means a genuinely different shared base texture now
+    }
+    if (b.mesh) b.mesh.material.color.set(colorVal || 0xffffff); // keep the virtual mesh's own stand-in material's colour in sync with this instance's real per-Briq tint
+  } else if (b.mesh) {
+    const depthCells = b.footprint.z1 - b.footprint.z0 + 1;
+    const mat = b.isSlabBlock
+      ? getSlabBodyMat(b.mainType, b.lengthCells, depthCells, colorVal)
+      : getWoodMatTinted(b.mainType, b.lengthCells, colorVal);
+    b.mesh.traverse((child) => { if (child.isMesh) child.material = mat; });
+  }
+  b.color = colorVal;
+}
+
 function cellsForBrick(anchor, lengthCells, crossCells, orientation) {
   const [ax, ay, az] = anchor;
   const cells = [];
@@ -5708,24 +6036,62 @@ function placeBrick(anchor, lengthCells, orientation, mainType, studded, force, 
     (fp.x0 + fp.x1 + 1) / 2 * CELL_M, (fp.z0 + fp.z1 + 1) / 2 * CELL_M,
     (fp.x1 - fp.x0 + 1) / 2 * CELL_M, (fp.z1 - fp.z0 + 1) / 2 * CELL_M,
   );
-  const geo = studded ? getStuddedBrickGeo(mainType, lengthCells) : getBrickGeo(mainType, lengthCells);
-  const woodMat = getWoodMatTinted(mainType, lengthCells, color);
-  const mesh = new THREE.Mesh(geo, woodMat);
-  const c = brickCenterWorld(fp);
-  mesh.position.set(c[0], c[1], c[2]);
-  if (orientation === 'z') mesh.rotation.y = Math.PI / 2;
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  const edges = new THREE.LineSegments(getBrickEdgesGeo(mainType, lengthCells), edgeMat);
-  mesh.add(edges);
-  scene.add(mesh);
-
+  // Ordinary wall Briqs live in a shared GPU-instanced pool now, one
+  // real draw call per (mainType, lengthCells, studded, tinted)
+  // combination instead of one per Briq — see that pool code's own
+  // comment for why "tinted" is its own axis. No individual mesh, and
+  // deliberately no per-Briq black edge outline either (LineSegments
+  // don't instance the same straightforward way triangle meshes do) —
+  // both of those, and roof/slab pieces (unrelated code paths, kept
+  // exactly as before), are open items of their own, not silently
+  // dropped without anyone noticing.
   const id = nextBrickId++;
-  bricks.set(id, { mesh, cells, footprint: fp, mainType, lengthCells, studded, color });
+  const pool = getOrCreateInstancePool(mainType, lengthCells, studded, !!color);
+  allocateInstanceSlot(pool, id);
+  const c = brickCenterWorld(fp);
+  const rotY = orientation === 'z' ? Math.PI / 2 : 0;
+  const m = new THREE.Matrix4();
+  m.makeRotationY(rotY);
+  m.setPosition(c[0], c[1], c[2]);
+  setInstanceTransform(pool, id, m);
+  setInstanceColorFor(pool, id, color);
+
+  // A plain, lightweight DATA object — never a real THREE.Object3D,
+  // never added to the scene, no GPU cost or draw call of its own —
+  // that mimics just enough of an individual Mesh's own shape
+  // (.position/.rotation/.geometry) for all the OTHER existing code
+  // (and tests) that reads a Briq's transform this exact way to keep
+  // working completely unchanged. `pool` (not `mesh`) is what internal
+  // logic actually branches on to tell an instanced Briq apart from a
+  // real-individual-mesh one (roof/slab pieces) — this object existing
+  // is no longer a reliable signal for that on its own.
+  const virtualMesh = {
+    position: { x: c[0], y: c[1], z: c[2] },
+    rotation: { y: rotY },
+    geometry: studded ? getStuddedBrickGeo(mainType, lengthCells) : getBrickGeo(mainType, lengthCells),
+    // A hybrid stand-in material: `.map` mirrors the POOL's own real,
+    // shared base texture (genuinely different between the tinted and
+    // untinted pools — see the pool system's own comment on why), while
+    // `.color` is a SEPARATE, per-Briq-accurate Color reflecting this
+    // one instance's own actual tint specifically (the pool's own base
+    // material's colour is never per-instance, only the real
+    // instanceColor buffer is) — kept in sync by applyBrickColor
+    // whenever this Briq is recoloured later.
+    material: { map: pool.mesh.material.map, color: new THREE.Color(color || 0xffffff) },
+    // No edge-outline child for an instanced Briq yet — deliberately
+    // left as its own separate, disclosed follow-up (see the pool
+    // system's own top-level comment for why) rather than silently
+    // dropped without anyone noticing. Still a real (empty) array
+    // rather than leaving `.children` undefined, so any code that
+    // happens to check "how many children does this Briq's mesh have"
+    // gets an honest, crash-free answer instead of a TypeError.
+    children: [],
+    userData: { brickId: id },
+  };
+  bricks.set(id, { mesh: virtualMesh, pool, orientation, cells, footprint: fp, mainType, lengthCells, studded, color });
   cells.forEach(cell => occupancy.set(key(...cell), id));
+  registerColumnIndex(id, fp);
   trackBuiltHeight(cells);
-  mesh.userData.brickId = id;
-  brickMeshes.push(mesh);
   totalPlaced++;
   updateHud();
   checkLevelSlotFill(cells, mainType);
@@ -5735,11 +6101,16 @@ function placeBrick(anchor, lengthCells, orientation, mainType, studded, force, 
 function removeBrickById(id) {
   const b = bricks.get(id);
   if (!b) return false;
-  scene.remove(b.mesh); // geometry/material are shared/cached, no dispose needed
+  if (b.pool) {
+    releaseInstanceSlot(b.pool, id);
+  } else if (b.mesh) {
+    scene.remove(b.mesh); // geometry/material are shared/cached, no dispose needed
+    const idx = brickMeshes.indexOf(b.mesh);
+    if (idx >= 0) brickMeshes.splice(idx, 1);
+  }
   b.cells.forEach(cell => occupancy.delete(key(...cell)));
+  unregisterColumnIndex(id, b.footprint);
   bricks.delete(id);
-  const idx = brickMeshes.indexOf(b.mesh);
-  if (idx >= 0) brickMeshes.splice(idx, 1);
   updateHud();
   checkLevelSlotReopen(b.cells);
   return true;
@@ -6914,13 +7285,7 @@ function endAction() {
     const applyStrokeColors = (colorFor) => {
       changes.forEach(({ b }, id) => {
         if (bricks.get(id) !== b) return; // this Briq was removed again since the stroke — nothing left to revert
-        const color = colorFor(id);
-        const depthCells = b.footprint.z1 - b.footprint.z0 + 1;
-        const mat = b.isSlabBlock
-          ? getSlabBodyMat(b.mainType, b.lengthCells, depthCells, color)
-          : getWoodMatTinted(b.mainType, b.lengthCells, color);
-        b.mesh.traverse((child) => { if (child.isMesh) child.material = mat; });
-        b.color = color;
+        applyBrickColor(id, b, colorFor(id));
       });
     };
     pushUndo(
@@ -7023,7 +7388,7 @@ function raycastAim() {
   // (=== 1) value from before switching would otherwise still block the
   // ground fallback Box just as urgently needs.
   const needsGroundFallback = !(tool === 'paint' || (tool === 'remove' && !removeBoxMode && removeGridCells === 1));
-  const targets = needsGroundFallback ? [ground, ...brickMeshes] : brickMeshes;
+  const targets = needsGroundFallback ? [ground, ...allBrickRaycastTargets()] : allBrickRaycastTargets();
   const hits = raycaster.intersectObjects(targets, false);
   return hits[0] || null;
 }
@@ -7054,7 +7419,7 @@ function raycastDecorSurface(mount) {
   const ndc = (mode === 'fp' && touchUI) ? { x: 0, y: 0 } : aimNDC;
   raycaster.setFromCamera(ndc, camera);
   if (mount === 'wall' || mount === 'ceiling') {
-    const hits = raycaster.intersectObjects(brickMeshes, false);
+    const hits = raycaster.intersectObjects(allBrickRaycastTargets(), false);
     return hits[0] || null;
   }
   const slabTargets = brickMeshes.filter((m) => {
@@ -7090,8 +7455,8 @@ function computeAnchorFromHit(hit, mainType, brickLen, orientation) {
   // chaining from there, instead of just clicking the open gap directly.
   const n = isGround
     ? { x: 0, y: 1, z: 0 }
-    : hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
-  const b = isGround ? null : bricks.get(hit.object.userData.brickId);
+    : hit.face.normal.clone().transformDirection(worldMatrixForHit(hit)).round();
+  const b = isGround ? null : bricks.get(brickIdFromHit(hit));
   const fp = b ? b.footprint : null;
   const approx = [hit.point.x / CELL_M, isGround ? 0 : hit.point.y / CELL_M, hit.point.z / CELL_M];
 
@@ -7326,10 +7691,10 @@ function computeWallYawFromNormal(n) {
 function updateWallDecorPlaceGhost() {
   const hit = raycastDecorSurface('wall');
   if (!hit) return;
-  const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+  const n = hit.face.normal.clone().transformDirection(worldMatrixForHit(hit)).round();
   const rotY = computeWallYawFromNormal(n);
   if (rotY === null) return; // a roughly horizontal (top/bottom) face isn't a wall
-  const b = bricks.get(hit.object.userData.brickId);
+  const b = bricks.get(brickIdFromHit(hit));
   if (!b) return;
   const x = snapDecorCoord(hit.point.x), z = snapDecorCoord(hit.point.z);
   const y = snapDecorCoord(hit.point.y);
@@ -7352,9 +7717,9 @@ function updateWallDecorPlaceGhost() {
 function updateCeilingDecorPlaceGhost() {
   const hit = raycastDecorSurface('ceiling');
   if (!hit) return;
-  const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+  const n = hit.face.normal.clone().transformDirection(worldMatrixForHit(hit)).round();
   if (n.y > -0.5) return; // only a genuine underside (downward-facing) counts as a ceiling
-  const b = bricks.get(hit.object.userData.brickId);
+  const b = bricks.get(brickIdFromHit(hit));
   if (!b) return;
   const x = snapDecorCoord(hit.point.x), z = snapDecorCoord(hit.point.z);
   const y = snapDecorCoord(hit.point.y);
@@ -7385,9 +7750,9 @@ function updateDecorAimAndGhost() {
     const isSlabHit = hit.object !== ground;
     let hitY = 0;
     if (isSlabHit) {
-      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+      const n = hit.face.normal.clone().transformDirection(worldMatrixForHit(hit)).round();
       if (n.y <= 0) return; // only the top face counts as standable ground
-      const b = bricks.get(hit.object.userData.brickId);
+      const b = bricks.get(brickIdFromHit(hit));
       if (!b) return;
       hitY = (b.footprint.y1 + 1) * CELL_M;
     }
@@ -7415,7 +7780,7 @@ function updateDecorAimAndGhost() {
     // and ceiling-mounting existed) stays completely untouched either way.
     const wallOrCeilingHit = raycastDecorSurface('wall');
     if (wallOrCeilingHit) {
-      const n = wallOrCeilingHit.face.normal.clone().transformDirection(wallOrCeilingHit.object.matrixWorld).round();
+      const n = wallOrCeilingHit.face.normal.clone().transformDirection(worldMatrixForHit(wallOrCeilingHit)).round();
       const wantMount = Math.abs(n.y) < 0.5 ? 'wall' : (n.y < -0.5 ? 'ceiling' : null);
       if (wantMount) {
         let best = null, bestDist = 0.4;
@@ -7439,9 +7804,9 @@ function updateDecorAimAndGhost() {
     const isSlabHit = hit.object !== ground;
     let hitY = 0;
     if (isSlabHit) {
-      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
+      const n = hit.face.normal.clone().transformDirection(worldMatrixForHit(hit)).round();
       if (n.y <= 0) return; // only the top face counts as standable ground
-      const b = bricks.get(hit.object.userData.brickId);
+      const b = bricks.get(brickIdFromHit(hit));
       if (!b) return;
       hitY = (b.footprint.y1 + 1) * CELL_M;
     }
@@ -7688,17 +8053,7 @@ function doPaintAction() {
   const oldColor = b.color;
   const newColor = brickColor;
   if (oldColor === newColor) return; // already this colour — nothing to do or undo
-  // A slab block's material is tiled to its own width/depth (see
-  // getSlabBodyMat) rather than the plain per-module material an
-  // ordinary Briq uses — recolouring has to go through the same helper,
-  // or the retiled repeat would be lost and the texture would stretch.
-  const depthCells = b.footprint.z1 - b.footprint.z0 + 1;
-  const getMat = (colorVal) => (b.isSlabBlock
-    ? getSlabBodyMat(b.mainType, b.lengthCells, depthCells, colorVal)
-    : getWoodMatTinted(b.mainType, b.lengthCells, colorVal));
-  const newMat = getMat(newColor);
-  b.mesh.traverse((child) => { if (child.isMesh) child.material = newMat; });
-  b.color = newColor;
+  applyBrickColor(id, b, newColor);
   triggerCrosshairSwing('paint');
   unlockAchievement('first_recolour');
   notifyTutorial('recolour');
@@ -7714,15 +8069,8 @@ function doPaintAction() {
     // falls back to its own individual undo/redo step rather than
     // silently losing that support altogether.
     pushUndo(
-      () => {
-        const revertMat = getMat(oldColor);
-        b.mesh.traverse((child) => { if (child.isMesh) child.material = revertMat; });
-        b.color = oldColor;
-      },
-      () => {
-        b.mesh.traverse((child) => { if (child.isMesh) child.material = newMat; });
-        b.color = newColor;
-      }
+      () => { applyBrickColor(id, b, oldColor); },
+      () => { applyBrickColor(id, b, newColor); }
     );
   }
 }
@@ -7830,8 +8178,8 @@ function updateAimAndGhost() {
           ty = 0;
           tz = Math.round(hit.point.z / CELL_M);
           courseH = BRIQ_CATALOG[mainType].crossCells; // no specific brick here — the box's own height just follows the currently-selected type
-        } else if (hit.object.userData && hit.object.userData.brickId) {
-          const b = bricks.get(hit.object.userData.brickId);
+        } else if (brickIdFromHit(hit) !== undefined) {
+          const b = bricks.get(brickIdFromHit(hit));
           if (b) {
             [tx, ty, tz] = b.cells[0];
             courseH = BRIQ_CATALOG[b.mainType].crossCells;
@@ -7866,24 +8214,25 @@ function updateAimAndGhost() {
           for (const id of idsToHighlight) {
             const b = bricks.get(id);
             if (!b) continue;
-            const hl = new THREE.Mesh(b.mesh.geometry, removeBoxHighlightMat);
-            hl.position.copy(b.mesh.position);
-            hl.rotation.copy(b.mesh.rotation);
-            hl.scale.copy(b.mesh.scale);
+            const t = getBrickWorldTransform(b);
+            const hl = new THREE.Mesh(getBrickGeometry(b), removeBoxHighlightMat);
+            hl.position.set(t.position[0], t.position[1], t.position[2]);
+            hl.rotation.y = t.rotationY;
             hl.renderOrder = 2;
             scene.add(hl);
             removeBoxHighlightMeshes.push(hl);
           }
         }
       }
-    } else if (hit && hit.object && hit.object.userData && hit.object.userData.brickId) {
-      const b = bricks.get(hit.object.userData.brickId);
+    } else if (brickIdFromHit(hit) !== undefined) {
+      const b = bricks.get(brickIdFromHit(hit));
       if (b) {
         currentTargetCell = b.cells[0];
         // highlight whole brick — red for Remove, violet for Recolour
-        ghostMesh.geometry = hit.object.geometry;
-        ghostMesh.position.copy(hit.object.position);
-        ghostMesh.rotation.copy(hit.object.rotation);
+        const t = getBrickWorldTransform(b);
+        ghostMesh.geometry = getBrickGeometry(b);
+        ghostMesh.position.set(t.position[0], t.position[1], t.position[2]);
+        ghostMesh.rotation.y = t.rotationY;
         ghostMesh.material = tool === 'paint' ? ghostMatPaint : ghostMatInvalid;
         ghostMesh.visible = true;
       }
@@ -7947,15 +8296,15 @@ function computeSlabCorner(hit, forcedType, defaultType) {
   if (isGround) {
     y = 0;
   } else {
-    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).round();
-    const b = bricks.get(hit.object.userData.brickId);
+    const n = hit.face.normal.clone().transformDirection(worldMatrixForHit(hit)).round();
+    const b = bricks.get(brickIdFromHit(hit));
     const fp = b ? b.footprint : null;
     if (!fp) y = 0;
     else if (n.y > 0) { y = fp.y1 + 1; touchedTop = true; } // clicked the top of a wall -> the course resting on it
     else { y = fp.y0; sideNormalIsX = n.x !== 0; } // clicked a side -> the same course as that brick, and note which axis that side's own face actually points along
   }
   const crossCells = BRIQ_CATALOG[slabType].crossCells;
-  const touchedBrick = isGround ? null : bricks.get(hit.object.userData.brickId);
+  const touchedBrick = isGround ? null : bricks.get(brickIdFromHit(hit));
   // Same "snap flush against a nearby wall's real edge" idea used for
   // the drag-based Briq flow (nearbyLengthMatch/nearbyCrossMatch) — a
   // click near an existing brick's edge must land EXACTLY on that edge,
@@ -8260,6 +8609,7 @@ function placeSlabBlock(x0, x1, y, z0, z1, mt, colorVal, force) {
     studded: false, color: colorVal, isSlabBlock: true,
   });
   cells.forEach((c) => occupancy.set(key(...c), id));
+  registerColumnIndex(id, fp);
   trackBuiltHeight(cells);
   body.userData.brickId = id;
   brickMeshes.push(body);
@@ -8378,6 +8728,7 @@ function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force)
     roofYLow: yLow, roofYHigh: yHigh, roofSlopeAxis: slopeAxis, roofMaterial: material,
   });
   cells.forEach((c) => occupancy.set(key(...c), id));
+  registerColumnIndex(id, fp);
   trackBuiltHeight(cells);
   body.userData.brickId = id;
   brickMeshes.push(body);
@@ -9640,10 +9991,12 @@ function computeCopyPasteRestY(entries, dx, dz) {
   for (let i = 0; i <= MAX_LIFTS; i++) {
     let overlaps = false;
     for (const e of entries) {
-      for (const c of entryCellsAt(e, dx, dy, dz)) {
-        if (occupancy.has(key(...c))) { overlaps = true; break; }
-      }
-      if (overlaps) break;
+      // Shares ONE per-entry implementation with the incremental
+      // preview job (entryOverlapsForRestY, defined with it below) so
+      // the two can never drift apart — see that helper's own comment
+      // for the box/roof split and the overlap-only (never bounds)
+      // semantics.
+      if (entryOverlapsForRestY(e, dx, dy, dz)) { overlaps = true; break; }
     }
     if (!overlaps) return dy;
     dy += step;
@@ -9674,69 +10027,190 @@ function computeCopyPasteRestY(entries, dx, dz) {
 // stud geometry) — anything more mixed is left at the raw aim; the
 // overlap/lift logic above still applies regardless, this refinement
 // on top of it just doesn't additionally kick in.
-// Cache for the copy-paste preview's own (fairly expensive — it scales
-// with however many pieces are in the clipboard) validity/position
-// computation, keyed on the exact things that could actually change
-// its result. Without this, updateCopyAimAndGhost recomputed all of it
-// from scratch on literally every single animation frame, even when
-// the aim hadn't moved to a new cell at all between one frame and the
-// next — harmless for a small clipboard, but a genuine, noticeable
-// stutter once someone copies a large structure (hundreds of Briqs),
-// since EVERY frame was repeating that full-sized computation for no
-// reason. Invalidated explicitly wherever the clipboard's own content
-// or anchor mode can change (capture, rotate, cycling the anchor
-// toggle) — see the few `copyPreviewCache = null;` lines at each of
-// those call sites.
-let copyPreviewCache = null; // { key, anchor, restY, flags }
-// The rest-height computation (computeCopyPasteRestY) is the single
-// most expensive part of this whole preview — for a large clipboard it
-// walks every entry's own full cell list, at every candidate lift
-// level, checking each one against the world's occupancy — and unlike
-// the colour computation just below, it was left completely
-// unthrottled: it reran in full on every single cache miss above (i.e.
-// on every frame the aim genuinely moved to a new cell at all), which
-// is the actual dominant cost behind the reported stutter once a large
-// structure gets copied, more so than the per-piece validity colouring
-// itself. Throttled here the same way, and for the same reason: the
-// ghost's own HEIGHT staying accurate to within ~150ms, rather than
-// the current frame exactly, is imperceptible during normal aiming,
-// while recomputing the full scan on literally every frame is not.
-let copyPreviewRestYCache = null; // { entries, restY, computedAt }
-const COPY_PREVIEW_RESTY_THROTTLE_MS = 150;
-// The per-piece validity check (computeEntryValidityFlags) is the most
-// expensive part of this — it scales with however many pieces are in
-// the clipboard, same as the rest, but unlike the position/height
-// computation it doesn't need to be perfectly up-to-the-frame to still
-// look right: colours flipping a fraction of a second later than the
-// ghost's own position moving is imperceptible during normal dragging,
-// while recomputing it on literally every cache miss (i.e. on every
-// frame the aim genuinely moves at all — the exact situation actively
-// lining up a large paste involves) is not. Throttled separately from
-// the position cache above it, so the ghost itself still follows the
-// cursor with zero lag every frame regardless.
-let copyPreviewColorCache = null; // { entries, flags, computedAt }
-const COPY_PREVIEW_COLOR_THROTTLE_MS = 150;
+// Cache for the copy-paste preview's own validity/position computation.
+// Only ever holds a COMPLETED result now (see the preview job just
+// below) — a partial, still-computing result is returned directly and
+// deliberately never cached, so a later query at the same spot keeps
+// advancing the job instead of getting stuck on a half-finished answer.
+// Invalidated (together with the job itself) wherever the clipboard's
+// own content can change — capture, rotate — via
+// resetCopyPreviewComputation().
+let copyPreviewCache = null; // { key, anchor, restY, flags, complete: true }
+/* -------- Time-sliced preview computation (the "preview job") --------
+   Even with the allocation-free fast checks above, ONE full
+   rest-height + validity pass over a genuinely large clipboard is
+   simply too much work to ever run inside a single frame: measured at
+   ~4000 copied WS25B50s, the original per-cell version took ~3000ms
+   per pass and the fast-path version still ~200ms — and the old
+   150ms-throttle design ran exactly such a full pass, synchronously,
+   every time its window expired while the aim moved. That IS the
+   "extremes Ruckeln sobald der Ghost erzeugt wurde": the game froze
+   for the full pass duration, several times per second, for as long
+   as the ghost existed.
+
+   So the full pass no longer exists on the frame path at all. Instead,
+   ONE incremental job holds the whole computation's own state (which
+   lift level, which entry index, which phase) and every frame advances
+   it by at most PREVIEW_JOB_ENTRY_BUDGET entry-checks — a small,
+   FIXED amount of work per frame, no matter how enormous the clipboard
+   is. While the job is still running, the ghost keeps following the
+   cursor every frame at full smoothness, showing the last COMPLETED
+   height and colours; the correct values then settle in a fraction of
+   a second after the aim rests (or immediately, for any normal-sized
+   clipboard that fits inside a single frame's budget anyway — which is
+   also why every pre-existing small-clipboard test still passes
+   unchanged). Moving the aim restarts the job for the new spot; the
+   on-screen colours live in ONE persistent per-clipboard array the job
+   overwrites in place, so fresh results visibly ripple across the
+   ghost as they're computed rather than blinking all at once.
+
+   The plain synchronous computeCopyPasteRestY / computeEntryValidityFlags
+   stay exactly as they are for the actual paste click (and as the
+   ground truth the job's own tests compare against) — one full pass at
+   the moment of a real click is fine; one per frame was the problem. */
+const PREVIEW_JOB_ENTRY_BUDGET = 1200; // tuned against a 4000-entry clipboard, worst case (pasting directly on top of the same wall it was copied from, forcing a height lift): cuts full-completion time from ~0.7s (at the original 200) to ~0.12s, while steady per-frame cost stays around 5\u201311ms \u2014 comfortably under a frame's own budget, so it settles fast without reintroducing the stutter
+let previewJob = null;
+let lastPreviewRestY = null;  // last COMPLETED job's rest height — served while a newer job is still running
+let lastPreviewFlags = null;  // ONE persistent flags array per clipboard — jobs overwrite it in place (the ripple)
+function resetCopyPreviewComputation() {
+  copyPreviewCache = null;
+  previewJob = null;
+  lastPreviewRestY = null;
+  lastPreviewFlags = null;
+}
+// The exact same per-entry overlap decision computeCopyPasteRestY's own
+// loop makes, extracted so the incremental job and the synchronous
+// ground-truth version share ONE implementation and can never drift
+// apart. Overlap ONLY, never world bounds — see computeCopyPasteRestY's
+// own comment on that.
+function entryOverlapsForRestY(e, dx, dy, dz) {
+  if (e.isRoofBlock) {
+    for (const c of entryCellsAt(e, dx, dy, dz)) {
+      if (occupancy.has(key(...c))) return true;
+    }
+    return false;
+  }
+  const fp = boxEntryShiftedFootprint(e, dx, dy, dz);
+  const overlap = boxOverlapsBuilt(fp);
+  if (overlap === true) return true;
+  if (overlap === 'roof') {
+    for (const c of entryCellsAt(e, dx, dy, dz)) {
+      if (occupancy.has(key(...c))) return true;
+    }
+  }
+  return false;
+}
+function startPreviewJob(entries, ax, az) {
+  // Memoised on the clipboard object (like _anchorCrossCells): the job
+  // restarts on EVERY frame the aim moves during active dragging, and a
+  // clipboard's own type composition can never change after capture —
+  // rebuilding this 2-pass Set scan thousands of times per drag was
+  // pure allocation churn.
+  let step;
+  if (clipboard && clipboard.entries === entries && clipboard._restStep !== undefined) {
+    step = clipboard._restStep;
+  } else {
+    const types = new Set(entries.map((e) => e.mainType));
+    const uniformType = types.size === 1 ? [...types][0] : null;
+    step = (uniformType && BRIQ_CATALOG[uniformType]) ? BRIQ_CATALOG[uniformType].crossCells : 1;
+    if (clipboard && clipboard.entries === entries) clipboard._restStep = step;
+  }
+  if (!lastPreviewFlags || lastPreviewFlags.length !== entries.length) lastPreviewFlags = new Array(entries.length).fill(true);
+  previewJob = {
+    entries, ax, az,
+    phase: 'restY',
+    dy: 0, step,
+    maxLifts: Math.ceil((HEIGHT_MAX + 4) / CELL_M / Math.max(step, 1)),
+    lifts: 0,
+    idx: 0,
+    virtualCells: null,
+    wantedSupportLayers: null, // built once when the flags phase starts (needs the final restY)
+    flags: lastPreviewFlags,
+    restY: 0,
+    done: false,
+  };
+}
+function startPreviewJobFlagsPhase(job) {
+  job.phase = 'flags';
+  job.idx = 0;
+  job.virtualCells = new Set();
+  // Same pre-pass as the synchronous computeEntryValidityFlags — see
+  // its own comment: only layers some plain-Briq seeker will actually
+  // probe are worth recording providers for at all.
+  job.wantedSupportLayers = new Set();
+  for (const e of job.entries) {
+    if (e.isRoofBlock || e.isSlabBlock) continue;
+    const seekerY0 = e.y + job.restY;
+    if (seekerY0 > 0) job.wantedSupportLayers.add(seekerY0 - 1);
+  }
+}
+function advancePreviewJob(budget) {
+  const job = previewJob;
+  let work = 0;
+  while (work < budget && !job.done) {
+    if (job.phase === 'restY') {
+      if (job.idx >= job.entries.length) {
+        // A whole lift level scanned with no overlap — this height works.
+        job.restY = job.dy;
+        startPreviewJobFlagsPhase(job);
+        continue;
+      }
+      work++;
+      if (entryOverlapsForRestY(job.entries[job.idx], job.ax, job.dy, job.az)) {
+        job.lifts++;
+        job.dy += job.step;
+        job.idx = 0; // this level failed — restart the scan one level up
+        if (job.lifts > job.maxLifts) {
+          // Same safety net as the synchronous version: never loop
+          // forever or place absurdly high on an unanticipated edge case.
+          job.restY = 0;
+          startPreviewJobFlagsPhase(job);
+        }
+        continue;
+      }
+      job.idx++;
+    } else {
+      if (job.idx >= job.entries.length) { job.done = true; break; }
+      const e = job.entries[job.idx];
+      work++;
+      const valid = entryValidAt(e, job.ax, job.restY, job.az, job.virtualCells);
+      job.flags[job.idx] = valid;
+      if (valid) {
+        // Identical virtual-support bookkeeping to
+        // computeEntryValidityFlags — see its own comments for the
+        // top-layer-only proof and the wanted-layers filter.
+        if (e.isRoofBlock) {
+          for (const c of entryCellsAt(e, job.ax, job.restY, job.az)) job.virtualCells.add(packedCellKey(c[0], c[1], c[2]));
+        } else {
+          const fp = boxEntryShiftedFootprint(e, job.ax, job.restY, job.az);
+          if (job.wantedSupportLayers.has(fp.y1)) {
+            for (let x = fp.x0; x <= fp.x1; x++) {
+              for (let z = fp.z0; z <= fp.z1; z++) job.virtualCells.add(packedCellKey(x, fp.y1, z));
+            }
+          }
+        }
+      }
+      job.idx++;
+    }
+  }
+  return job.done;
+}
 function getCopyPreviewForAim(entries, rawX, rawZ) {
-  const key = `${rawX}_${rawZ}`;
-  if (copyPreviewCache && copyPreviewCache.key === key) return copyPreviewCache;
+  const cacheKey = `${rawX}_${rawZ}`;
+  if (copyPreviewCache && copyPreviewCache.key === cacheKey) return copyPreviewCache;
   const anchor = resolveCopyPasteAnchor(entries, rawX, rawZ);
-  const now = Date.now();
-  let restY;
-  if (copyPreviewRestYCache && copyPreviewRestYCache.entries === entries && (now - copyPreviewRestYCache.computedAt) < COPY_PREVIEW_RESTY_THROTTLE_MS) {
-    restY = copyPreviewRestYCache.restY;
-  } else {
-    restY = computeCopyPasteRestY(entries, anchor.x, anchor.z);
-    copyPreviewRestYCache = { entries, restY, computedAt: now };
+  const jobMatches = previewJob && previewJob.entries === entries && previewJob.ax === anchor.x && previewJob.az === anchor.z;
+  if (!jobMatches) startPreviewJob(entries, anchor.x, anchor.z);
+  if (!previewJob.done) advancePreviewJob(PREVIEW_JOB_ENTRY_BUDGET);
+  if (previewJob.done) {
+    // Several raw aim positions round to the same anchor (the paste
+    // grid is coarser than single cells) — a completed job keeps
+    // serving all of them without recomputing anything.
+    lastPreviewRestY = previewJob.restY;
+    copyPreviewCache = { key: cacheKey, anchor, restY: previewJob.restY, flags: previewJob.flags, complete: true };
+    return copyPreviewCache;
   }
-  let flags;
-  if (copyPreviewColorCache && copyPreviewColorCache.entries === entries && (now - copyPreviewColorCache.computedAt) < COPY_PREVIEW_COLOR_THROTTLE_MS) {
-    flags = copyPreviewColorCache.flags;
-  } else {
-    flags = computeEntryValidityFlags(entries, anchor.x, restY, anchor.z);
-    copyPreviewColorCache = { entries, flags, computedAt: now };
-  }
-  copyPreviewCache = { key, anchor, restY, flags };
-  return copyPreviewCache;
+  return { key: cacheKey, anchor, restY: lastPreviewRestY !== null ? lastPreviewRestY : 0, flags: previewJob.flags, partial: true };
 }
 function resolveCopyPasteAnchor(entries, rawX, rawZ) {
   // The world ground and every real wall type share the exact same 25cm
@@ -9752,9 +10226,19 @@ function resolveCopyPasteAnchor(entries, rawX, rawZ) {
   // type, since Platte pieces are grid-snapped by their own placement
   // flow already and a roof panel's own smaller module is a separate,
   // deliberately un-unified case.
+  // Three full passes over every entry (every, map, Set) — trivial for
+  // a small clipboard, but this runs on EVERY frame the aim moves at
+  // all, and a clipboard's own composition can never change after
+  // capture (rotation reorients entries but keeps their kinds/types) —
+  // so the answer is memoised once per clipboard object, right on it.
+  if (clipboard && clipboard.entries === entries && clipboard._anchorCrossCells !== undefined) {
+    const cc = clipboard._anchorCrossCells;
+    return { x: Math.round(rawX / cc) * cc, z: Math.round(rawZ / cc) * cc };
+  }
   const allPlainBricks = entries.every((e) => !e.isSlabBlock && !e.isRoofBlock);
   const types = new Set(entries.map((e) => e.mainType));
   const crossCells = (allPlainBricks && types.size === 1) ? BRIQ_CATALOG[[...types][0]].crossCells : BRIQ_CATALOG.WS25.crossCells;
+  if (clipboard && clipboard.entries === entries) clipboard._anchorCrossCells = crossCells;
   return { x: Math.round(rawX / crossCells) * crossCells, z: Math.round(rawZ / crossCells) * crossCells };
 }
 function entryCellsAt(e, dx, dy, dz) {
@@ -9768,6 +10252,63 @@ function entryCellsAt(e, dx, dy, dz) {
   }
   const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
   return cellsForBrick([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, crossCells, e.orientation);
+}
+/* -------- Fast, allocation-free entry checks for the paste preview --------
+   entryCellsAt above builds a brand-new array of brand-new per-cell
+   arrays on every single call — one WS25B50 alone is 250 of them. For a
+   large clipboard, the preview's own validity/rest-height passes were
+   calling it for EVERY entry on every recompute: copying a few thousand
+   Briqs meant literally millions of throwaway allocations per pass,
+   every 150ms, for as long as the ghost stayed on screen — which (via
+   the garbage collector as much as the raw work itself) is the actual
+   "extremes Ruckeln sobald der Ghost erzeugt wurde", surviving both the
+   marking-scan fix and the rendering-side instancing untouched.
+
+   These helpers do the same checks with pure footprint interval maths
+   plus the columnIndex (already maintained for other reasons): no cell
+   arrays, no per-cell key strings for the common all-clear case. They
+   only apply to BOX-shaped things — ordinary Briqs and Platten, whose
+   occupancy cells genuinely fill their whole bounding box. A Dach
+   panel's sloped cells deliberately DON'T fill its box (that's the
+   whole point of a slope), so roof ENTRIES keep the exact per-cell path
+   entirely, and a roof CANDIDATE found near a box forces that one box
+   back through the exact path too, rather than risking a false
+   "occupied" where the slope actually leaves room. */
+function boxEntryShiftedFootprint(e, dx, dy, dz) {
+  const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
+  if (e.isSlabBlock) {
+    // Slab entries store x1/z1 EXCLUSIVE (matching slabCellsFor's own
+    // loop bounds); footprints everywhere else are inclusive, so -1.
+    return { x0: e.x0 + dx, x1: e.x1 - 1 + dx, y0: e.y + dy, y1: e.y + crossCells - 1 + dy, z0: e.z0 + dz, z1: e.z1 - 1 + dz };
+  }
+  return footprintOf([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, crossCells, e.orientation);
+}
+// The same bounds rule cellsFree applies per cell, expressed once for a
+// whole box instead.
+function footprintWithinWorldBounds(fp) {
+  return fp.x0 >= -CELL_BOUND && fp.x1 <= CELL_BOUND && fp.z0 >= -CELL_BOUND && fp.z1 <= CELL_BOUND && fp.y0 >= 0 && fp.y1 <= CELL_Y_MAX;
+}
+// Would this box overlap anything already built? Column candidates plus
+// one Y-interval comparison per candidate. Returns true (definite
+// overlap with a box-shaped Briq/Platte), false (definitely clear), or
+// 'roof' (a Dach candidate's box is in range — its box overstates its
+// sloped cells, so the caller must decide via the exact per-cell path).
+function boxOverlapsBuilt(fp) {
+  let sawRoof = false;
+  for (let x = fp.x0; x <= fp.x1; x++) {
+    for (let z = fp.z0; z <= fp.z1; z++) {
+      const set = columnIndex.get(columnKey(x, z));
+      if (!set) continue;
+      for (const id of set) {
+        const b = bricks.get(id);
+        if (!b) continue;
+        if (b.footprint.y0 > fp.y1 || b.footprint.y1 < fp.y0) continue; // no vertical overlap with this candidate
+        if (b.isRoofBlock) { sawRoof = true; continue; } // maybe-overlap only — keep scanning for a DEFINITE box hit first
+        return true;
+      }
+    }
+  }
+  return sawRoof ? 'roof' : false;
 }
 // Whether ONE clipboard entry would genuinely be placeable if shifted
 // by (dx, dy, dz) — mirroring exactly what pasteEntryAt's own
@@ -9790,16 +10331,22 @@ function entryCellsAt(e, dx, dy, dz) {
 // that lower course's own placeBrick call has run) — it only exists as
 // another piece of this SAME clipboard, not in the real occupancy map.
 function entryValidAt(e, dx, dy, dz, virtualCells) {
-  const cells = entryCellsAt(e, dx, dy, dz);
-  if (!cellsFree(cells)) return false;
-  if (e.isRoofBlock || e.isSlabBlock) return true;
-  const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
-  const fp = footprintOf([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, crossCells, e.orientation);
+  if (e.isRoofBlock) {
+    // Sloped cells — the exact per-cell path, unchanged (see the fast-
+    // helper block's own comment above for why roofs never take it).
+    return cellsFree(entryCellsAt(e, dx, dy, dz));
+  }
+  const fp = boxEntryShiftedFootprint(e, dx, dy, dz);
+  if (!footprintWithinWorldBounds(fp)) return false;
+  const overlap = boxOverlapsBuilt(fp);
+  if (overlap === true) return false;
+  if (overlap === 'roof' && !cellsFree(entryCellsAt(e, dx, dy, dz))) return false; // a Dach's box is in range — only the exact path can tell whether its sloped cells actually collide
+  if (e.isSlabBlock) return true;
   if (fp.y0 <= 0) return true; // ground-level is always fine, same rule structuralCheck itself uses
   for (let x = fp.x0; x <= fp.x1; x++) {
     for (let z = fp.z0; z <= fp.z1; z++) {
       if (occupancy.has(key(x, fp.y0 - 1, z))) return true;
-      if (virtualCells && virtualCells.has(`${x}_${fp.y0 - 1}_${z}`)) return true;
+      if (virtualCells && virtualCells.has(packedCellKey(x, fp.y0 - 1, z))) return true;
     }
   }
   return false;
@@ -9814,6 +10361,22 @@ function shiftCaptureEntry(e, dx, dy, dz) {
 // coordinates — mirrors placeRoofBlock/placeSlabBlock/placeBrick's own
 // geometry+transform math exactly, just with a preview material and no
 // occupancy/collision side effects.
+// A small ghost material, shared by every per-capture instanced-preview
+// pool below — base colour is neutral WHITE (transparent, half opacity)
+// so the PER-INSTANCE colour (recomputed every frame from that specific
+// piece's own validity at the currently-aimed spot) is what actually
+// determines blue-vs-red, the same multiply-tint trick a real Briq's
+// own colour already uses.
+const copyPreviewInstancedMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+const COPY_PREVIEW_VALID_COLOR = new THREE.Color(0x5fa8d6);
+const COPY_PREVIEW_INVALID_COLOR = new THREE.Color(0xd9534f);
+// Parallel to clipboardPreviewGroup itself: for each clipboard entry
+// index i, records exactly how to find/recolour its own ghost
+// representation afterward — either a slot within one of the small
+// per-capture ghost instance pools below (an ordinary wall Briq), or a
+// direct reference to its own individual ghost mesh (roof/slab pieces,
+// unchanged from before this rework).
+let clipboardPreviewEntryInfo = [];
 function buildEntryGhostMesh(e) {
   // Deliberately no castShadow/receiveShadow here (unlike every REAL
   // brick mesh, which does set both) — these are translucent 50%-
@@ -9851,17 +10414,78 @@ function clearClipboardPreview() {
     if (clipboardPreviewGroup.parent) scene.remove(clipboardPreviewGroup);
     clipboardPreviewGroup = null;
   }
+  clipboardPreviewEntryInfo = [];
 }
 // Built ONCE right after a capture, then just translated as a whole
 // group every frame in updateCopyAimAndGhost — far cheaper than
 // rebuilding individual meshes every frame, and keeps every piece's
 // relative position to each other exactly fixed while only its group
 // offset (i.e. where you're currently hovering) changes.
+//
+// Ordinary wall Briq entries get grouped by (mainType, lengthCells,
+// studded) and rendered through their own small, dedicated
+// InstancedMesh — one real draw call per DISTINCT size/type combination
+// in the clipboard, instead of one per individual copied Briq. This is
+// what a genuinely large copy (a thousand-plus-Briq wall or floor is a
+// completely ordinary thing to want to copy) actually needed: moving
+// this preview around to find a paste spot, not the marking-rectangle
+// scan fixed earlier, turned out to be the real cost at that scale.
+// Built fresh, sized exactly right, every time a new capture happens;
+// never grown or shrunk afterward the way the persistent per-placed-
+// Briq pools are, since a clipboard's own contents never change once
+// captured. Roof/slab entries stay individual, exactly as before —
+// same reasoning as leaving them out of the real placed-Briq instancing
+// rework: far fewer of them in a typical build, and not worth the
+// added complexity yet.
 function buildClipboardPreview() {
   clearClipboardPreview();
   if (!clipboard) return;
   clipboardPreviewGroup = new THREE.Group();
-  for (const e of clipboard.entries) clipboardPreviewGroup.add(buildEntryGhostMesh(e));
+  clipboardPreviewEntryInfo = new Array(clipboard.entries.length).fill(null);
+
+  const groups = new Map(); // poolKey -> { mainType, lengthCells, studded, entries: [{index, e}] }
+  clipboard.entries.forEach((e, i) => {
+    if (e.isRoofBlock || e.isSlabBlock) return; // stay individual, handled in the second pass below
+    const k = instancePoolKey(e.mainType, e.lengthCells, e.studded, false); // "tinted" is meaningless here — a ghost's own colour always comes from validity, never a real wood tint
+    let g = groups.get(k);
+    if (!g) { g = { mainType: e.mainType, lengthCells: e.lengthCells, studded: e.studded, entries: [] }; groups.set(k, g); }
+    g.entries.push({ index: i, e });
+  });
+
+  for (const g of groups.values()) {
+    const geo = g.studded ? getStuddedBrickGeo(g.mainType, g.lengthCells) : getBrickGeo(g.mainType, g.lengthCells);
+    const inst = new THREE.InstancedMesh(geo, copyPreviewInstancedMat, g.entries.length);
+    inst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(g.entries.length * 3), 3);
+    g.entries.forEach(({ index, e }, slot) => {
+      const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
+      const fp = footprintOf([e.x, e.y, e.z], e.lengthCells, crossCells, e.orientation);
+      const c = brickCenterWorld(fp);
+      const m = new THREE.Matrix4();
+      m.makeRotationY(e.orientation === 'z' ? Math.PI / 2 : 0);
+      m.setPosition(c[0], c[1], c[2]);
+      inst.setMatrixAt(slot, m);
+      inst.setColorAt(slot, COPY_PREVIEW_VALID_COLOR); // a reasonable default until the very first real validity pass runs, a frame from now
+      clipboardPreviewEntryInfo[index] = { instancedMesh: inst, slot, geometry: geo, position: [c[0], c[1], c[2]], rotationY: e.orientation === 'z' ? Math.PI / 2 : 0 };
+    });
+    clipboardPreviewGroup.add(inst);
+  }
+
+  clipboard.entries.forEach((e, i) => {
+    if (!e.isRoofBlock && !e.isSlabBlock) return;
+    const mesh = buildEntryGhostMesh(e);
+    clipboardPreviewGroup.add(mesh);
+    clipboardPreviewEntryInfo[i] = { mesh };
+  });
+}
+// The effective world-space geometry/position/rotation for ghost entry
+// i, regardless of whether it's rendered through an instanced pool or
+// its own individual mesh above — the ghost-preview counterpart to
+// getBrickWorldTransform/getBrickGeometry for real placed Briqs.
+function getClipboardPreviewEntryInfo(i) {
+  const info = clipboardPreviewEntryInfo[i];
+  if (!info) return null;
+  if (info.mesh) return { geometry: info.mesh.geometry, position: [info.mesh.position.x, info.mesh.position.y, info.mesh.position.z], rotationY: info.mesh.rotation.y };
+  return { geometry: info.geometry, position: info.position, rotationY: info.rotationY };
 }
 // Places one captured entry shifted by (dx,dy,dz), respecting normal
 // collision rules (force=false) — returns the new brick's id on success,
@@ -9923,15 +10547,13 @@ function captureClipboard(x0, x1, z0, z1) {
   for (const e of entries) shiftCaptureEntry(e, -x0, 0, -z0);
   clipboard = { entries, w: x1 - x0, d: z1 - z0, minY, maxY };
   rebaseClipboardToTightBounds(); // corrects w/d/entries down to the ACTUAL captured footprint, not the (usually larger) marked rectangle
-  copyPreviewCache = null; copyPreviewColorCache = null; copyPreviewRestYCache = null; // a brand new clipboard — any cached preview from a previous one is meaningless now, even if the aim happens to land on the exact same cell as before
+  resetCopyPreviewComputation(); // a brand new clipboard — any cached/in-progress preview computation from a previous one is meaningless now, even if the aim happens to land on the exact same cell as before
   buildClipboardPreview();
 }
 function clearClipboard() {
   clipboard = null;
   copyStart = null;
-  copyPreviewCache = null;
-  copyPreviewColorCache = null;
-  copyPreviewRestYCache = null;
+  resetCopyPreviewComputation();
   clearClipboardPreview();
   updateBriqControlsVisibility();
 }
@@ -9985,6 +10607,71 @@ function pasteClipboardAt(tx, tz) {
       }
     );
     playPlaceSound(false); // pasting a whole group reads as snapping a prefab piece into place, not a single heavy drop
+    recordBriqsPlaced(placedIds.length);
+    unlockAchievement('first_copy');
+    if (selectedTeam === 'triqbriq' && placedIds.length >= 10) unlockAchievement('triqbriq_series');
+  }
+  return placedIds.length;
+}
+// A big clipboard (copying a whole finished section of a build, say)
+// could mean placing hundreds of Briqs in one go — doing that in a
+// single synchronous pass (pasteClipboardAt above) blocks the page for
+// however long it takes with no chance for the browser to paint a
+// single frame in between, which reads as a stutter/freeze regardless
+// of how fast the device actually is: a 400ms freeze on a phone and a
+// 50ms freeze on a gaming PC both still LOOK like "it froze for a
+// moment" to a person watching, even though one machine genuinely did
+// finish 8x faster — a dropped frame is a dropped frame either way.
+// This is the version the real Copy tool actually calls: chunks the
+// exact same placement work across several animation frames for a
+// large paste, with the same loading overlay + progress bar already
+// used for big saves (see LOADING_OVERLAY_THRESHOLD's own comment for
+// why turning pasteClipboardAt itself async, rather than adding a
+// separate wrapper like this, would have broken ordering assumptions
+// all over the test suite).
+//
+// Deliberately scoped to just the paste itself for now — undo/redo of a
+// large paste still happens in one synchronous burst each, which could
+// in principle show the same stutter on a big enough clipboard. Left
+// alone since it's a rarer action than the initial paste and this
+// already addresses the specific complaint; worth revisiting the same
+// way if it turns out to matter in practice.
+const PASTE_OVERLAY_THRESHOLD = 60;
+const PASTE_CHUNK_SIZE = 25;
+async function pasteClipboardAtWithProgress(tx, tz) {
+  if (!clipboard) return 0;
+  const entries = clipboard.entries;
+  if (entries.length <= PASTE_OVERLAY_THRESHOLD) return pasteClipboardAt(tx, tz); // small enough that the plain synchronous path is already effectively instant
+  const restY = computeCopyPasteRestY(entries, tx, tz);
+  const placedIds = [];
+  showLoadingOverlay('Pasting\u2026');
+  await nextFrame(); // let the overlay itself actually paint before the heavy work below ever starts
+  let processed = 0;
+  for (const e of entries) {
+    const id = pasteEntryAt(e, tx, restY, tz);
+    if (id !== null && id !== false) placedIds.push(id);
+    processed++;
+    if (processed % PASTE_CHUNK_SIZE === 0) {
+      updateLoadingProgress(processed / entries.length);
+      await nextFrame();
+    }
+  }
+  hideLoadingOverlay();
+  if (placedIds.length > 0) {
+    const state = { ids: placedIds };
+    pushUndo(
+      () => { for (const id of state.ids) removeBrickById(id); },
+      () => {
+        const newIds = [];
+        for (const e of entries) {
+          const id = pasteEntryAt(e, tx, restY, tz, true);
+          if (id !== null && id !== false) newIds.push(id);
+        }
+        state.ids = newIds;
+        playPlaceSound(false);
+      }
+    );
+    playPlaceSound(false);
     recordBriqsPlaced(placedIds.length);
     unlockAchievement('first_copy');
     if (selectedTeam === 'triqbriq' && placedIds.length >= 10) unlockAchievement('triqbriq_series');
@@ -10077,20 +10764,20 @@ function rotateClipboard90() {
     else rotateBrickEntry90(e);
   }
   rebaseClipboardToTightBounds();
-  copyPreviewCache = null; copyPreviewColorCache = null; copyPreviewRestYCache = null; // the entries themselves just changed shape — a cached preview keyed only on aim position (or, for colours/height, only on the entries array reference — rotation mutates entries IN PLACE rather than replacing the array) would otherwise still match and wrongly get reused
+  resetCopyPreviewComputation(); // the entries themselves just changed shape — a cached/in-progress preview keyed on aim position (or on the entries array reference — rotation mutates entries IN PLACE rather than replacing the array) would otherwise still match and wrongly get reused
   buildClipboardPreview();
 }
 // Reads the CURRENT aim (refreshed every frame by updateCopyAimAndGhost,
 // same pattern as slabStart/currentSlabCorner) rather than raycasting
 // itself — keeps this in step with the ghost preview the player is
 // actually looking at when they click.
-function doCopyAction() {
+async function doCopyAction() {
   const cur = currentCopyCorner;
   if (!cur) return;
   if (clipboard) {
     const a0 = copyPasteAnchor(cur);
     const a = resolveCopyPasteAnchor(clipboard.entries, a0.x, a0.z);
-    pasteClipboardAt(a.x, a.z);
+    await pasteClipboardAtWithProgress(a.x, a.z);
     return;
   }
   if (!copyStart) { copyStart = cur; updateBriqControlsVisibility(); return; }
@@ -10115,12 +10802,55 @@ function doCopyAction() {
 // been shown as fine a moment earlier.
 function computeEntryValidityFlags(entries, dx, dy, dz) {
   const virtualCells = new Set();
+  // Only entries whose bottom actually sits on some OTHER entry's top
+  // ever consult the virtual-support set — so before recording anything
+  // into it, work out which shifted layers will genuinely be probed at
+  // all (each plain-Briq seeker probes exactly its own shifted y0 - 1;
+  // Platte/Dach never seek support). For the overwhelmingly common
+  // flat, single-course capture — every entry at the same ground level
+  // — this set is simply EMPTY, and the whole pass records nothing:
+  // measured on a ~4000-piece clipboard, it was precisely the
+  // 200k-element virtual set (its growth rehashes especially) that
+  // dominated this pass's cost, for support lookups that never
+  // happened.
+  const wantedSupportLayers = new Set();
+  for (const e of entries) {
+    if (e.isRoofBlock || e.isSlabBlock) continue;
+    const seekerY0 = e.y + dy;
+    if (seekerY0 > 0) wantedSupportLayers.add(seekerY0 - 1);
+  }
   const flags = [];
   for (const e of entries) {
     const valid = entryValidAt(e, dx, dy, dz, virtualCells);
     flags.push(valid);
     if (valid) {
-      for (const c of entryCellsAt(e, dx, dy, dz)) virtualCells.add(c.join('_'));
+      if (e.isRoofBlock) {
+        // A slope's actual cells vary per column — only the full exact
+        // list is honest here, same as everywhere else roofs opt out of
+        // the box fast paths. Kept unconditional: a roof's own cells
+        // span several layers, and roofs are rare enough that filtering
+        // them per-layer isn't worth the added subtlety.
+        for (const c of entryCellsAt(e, dx, dy, dz)) virtualCells.add(packedCellKey(c[0], c[1], c[2]));
+      } else {
+        // Box entries contribute only their TOP layer, not every cell —
+        // sufficient, not just cheaper: the only thing this set is ever
+        // consulted for is entryValidAt's own support check at some
+        // LATER entry's (fp.y0 - 1) layer, and for two box pieces of
+        // the same clipboard (which can never overlap each other — they
+        // were captured from real, non-overlapping placed Briqs and all
+        // shift together), a supporter owning a cell at that layer
+        // without also colliding forces its top to be EXACTLY that
+        // layer. Its middle cells can never be the support cell of
+        // anything, so recording them was pure waste — and a top layer
+        // NOBODY's bottom rests on (see wantedSupportLayers above) is
+        // skipped entirely too.
+        const fp = boxEntryShiftedFootprint(e, dx, dy, dz);
+        if (wantedSupportLayers.has(fp.y1)) {
+          for (let x = fp.x0; x <= fp.x1; x++) {
+            for (let z = fp.z0; z <= fp.z1; z++) virtualCells.add(packedCellKey(x, fp.y1, z));
+          }
+        }
+      }
     }
   }
   return flags;
@@ -10150,8 +10880,14 @@ function updateCopyAimAndGhost() {
       // and in the SAME sequential order (see computeEntryValidityFlags'
       // own comment on why that specifically matters).
       clipboard.entries.forEach((e, i) => {
-        const mesh = clipboardPreviewGroup.children[i];
-        if (mesh) mesh.material = flags[i] ? copyPreviewMat : copyPreviewInvalidMat;
+        const info = clipboardPreviewEntryInfo[i];
+        if (!info) return;
+        if (info.instancedMesh) {
+          info.instancedMesh.setColorAt(info.slot, flags[i] ? COPY_PREVIEW_VALID_COLOR : COPY_PREVIEW_INVALID_COLOR);
+          info.instancedMesh.instanceColor.needsUpdate = true;
+        } else if (info.mesh) {
+          info.mesh.material = flags[i] ? copyPreviewMat : copyPreviewInvalidMat;
+        }
       });
       if (!clipboardPreviewGroup.parent) scene.add(clipboardPreviewGroup);
     }
@@ -10171,16 +10907,30 @@ function updateCopyAimAndGhost() {
   if (!copyGhostMesh.parent) scene.add(copyGhostMesh);
 
   clearCopyAreaHighlights();
-  for (const [, b] of bricks) {
+  // Looks up ONLY the columns the marked rectangle actually spans,
+  // rather than scanning every single Briq in the entire build — see
+  // columnIndex's own comment for why that distinction matters. Bounded
+  // by how big the MARKED AREA is (something the player controls by how
+  // far they drag), never by how much they've built everywhere else.
+  const candidateIds = new Set();
+  for (let x = x0; x < x1; x++) {
+    for (let z = z0; z < z1; z++) {
+      const set = columnIndex.get(columnKey(x, z));
+      if (set) for (const id of set) candidateIds.add(id);
+    }
+  }
+  for (const id of candidateIds) {
+    const b = bricks.get(id);
+    if (!b) continue;
     const fp = b.footprint;
     // Fully inside only — matching EXACTLY the rule captureClipboard
     // itself uses, so this highlight never promises something that
     // wouldn't actually get captured.
     if (fp.x0 >= x0 && fp.x1 < x1 && fp.z0 >= z0 && fp.z1 < z1) {
-      const hl = new THREE.Mesh(b.mesh.geometry, copyAreaHighlightMat);
-      hl.position.copy(b.mesh.position);
-      hl.rotation.copy(b.mesh.rotation);
-      hl.scale.copy(b.mesh.scale);
+      const t = getBrickWorldTransform(b);
+      const hl = new THREE.Mesh(getBrickGeometry(b), copyAreaHighlightMat);
+      hl.position.set(t.position[0], t.position[1], t.position[2]);
+      hl.rotation.y = t.rotationY;
       hl.renderOrder = 2;
       scene.add(hl);
       copyAreaHighlightMeshes.push(hl);
@@ -10261,27 +11011,43 @@ function updateRemoveBoxAimAndGhost() {
   if (!removeBoxGhostMesh.parent) scene.add(removeBoxGhostMesh);
 
   clearRemoveBoxHighlights();
-  for (const [, b] of bricks) {
-    const fp = b.footprint;
-    if (fp.x1 >= x0 && fp.x0 < x1 && fp.z1 >= z0 && fp.z0 < z1) {
-      const hl = new THREE.Mesh(b.mesh.geometry, removeBoxHighlightMat);
-      hl.position.copy(b.mesh.position);
-      hl.rotation.copy(b.mesh.rotation);
-      hl.scale.copy(b.mesh.scale);
-      // Both this and the box's own translucent fill are transparent,
-      // so without an explicit draw order, THREE.js's own distance-based
-      // sort can render the fill ON TOP of a highlight that's fully
-      // INSIDE the box, blending it toward the fill's orange rather than
-      // showing clearly red — while a Briq sitting right at the box's
-      // edge (its highlight partly outside the fill's own footprint)
-      // stays visibly red there regardless, which is exactly what made
-      // it look like only edge pieces were highlighted at all. Forcing
-      // this to draw AFTER (renderOrder) the fill keeps every
-      // highlighted Briq clearly red, wherever in the box it sits.
-      hl.renderOrder = 2;
-      scene.add(hl);
-      removeBoxHighlightMeshes.push(hl);
+  // Looks up ONLY the columns the box actually spans, rather than
+  // scanning every single Briq in the entire build — same fix, and same
+  // reasoning, as the Copy tool's own marking-rectangle highlight (see
+  // columnIndex's own comment). This check is OVERLAP, not "fully
+  // inside" (Remove clears anything touching the box, not just pieces
+  // wholly within it) — which conveniently means every candidate the
+  // column index returns is already a genuine match on its own: if a
+  // Briq's footprint touches even one column inside [x0,x1)\u00d7[z0,z1),
+  // its own bounds necessarily overlap that rectangle, with nothing
+  // further to check.
+  const removeBoxCandidateIds = new Set();
+  for (let x = x0; x < x1; x++) {
+    for (let z = z0; z < z1; z++) {
+      const set = columnIndex.get(columnKey(x, z));
+      if (set) for (const id of set) removeBoxCandidateIds.add(id);
     }
+  }
+  for (const id of removeBoxCandidateIds) {
+    const b = bricks.get(id);
+    if (!b) continue;
+    const t = getBrickWorldTransform(b);
+    const hl = new THREE.Mesh(getBrickGeometry(b), removeBoxHighlightMat);
+    hl.position.set(t.position[0], t.position[1], t.position[2]);
+    hl.rotation.y = t.rotationY;
+    // Both this and the box's own translucent fill are transparent,
+    // so without an explicit draw order, THREE.js's own distance-based
+    // sort can render the fill ON TOP of a highlight that's fully
+    // INSIDE the box, blending it toward the fill's orange rather than
+    // showing clearly red — while a Briq sitting right at the box's
+    // edge (its highlight partly outside the fill's own footprint)
+    // stays visibly red there regardless, which is exactly what made
+    // it look like only edge pieces were highlighted at all. Forcing
+    // this to draw AFTER (renderOrder) the fill keeps every
+    // highlighted Briq clearly red, wherever in the box it sits.
+    hl.renderOrder = 2;
+    scene.add(hl);
+    removeBoxHighlightMeshes.push(hl);
   }
 }
 
@@ -11288,9 +12054,11 @@ document.getElementById('exportDownloadBtn').addEventListener('click', downloadE
 document.getElementById('exportShareBtn').addEventListener('click', shareExport);
 
 function clearAllBricks() {
-  for (const b of bricks.values()) scene.remove(b.mesh);
+  for (const b of bricks.values()) { if (!b.pool && b.mesh) scene.remove(b.mesh); }
+  clearAllInstancePools();
   bricks.clear();
   occupancy.clear();
+  columnIndex.clear();
   brickMeshes.length = 0;
   totalPlaced = 0;
   highestBuiltCellY = 0;

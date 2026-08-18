@@ -740,7 +740,6 @@ try {
   .modal{
     max-width:420px; width:100%; max-height:85vh; background:var(--ink-2); border:1px solid var(--oak);
     border-radius:14px; box-shadow: var(--shadow);
-    background-image: repeating-linear-gradient(0deg, rgba(201,138,75,.05) 0 1px, transparent 1px 26px);
     display:flex; flex-direction:column; overflow:hidden;
   }
   .modal-scroll{
@@ -880,6 +879,25 @@ try {
      freeform building at any time without having to finish or hunt for
      a menu entry. Hidden entirely (display:none) whenever no level is
      in progress. */
+  /* Full-screen overlay shown while a large save is being loaded — big
+     saves place hundreds/thousands of Briqs one at a time, which is
+     chunked across several animation frames (see applyLoadedData's own
+     comment) specifically so the browser gets a chance to actually
+     paint this instead of just hanging with no feedback for however
+     long that takes. z-index:50 sits above every modal in the game
+     (the highest anything else uses is 31) since loading can be
+     triggered from inside one (the Load menu itself). */
+  #loadingOverlay{
+    position:fixed; inset:0; z-index:50; background:rgba(20,15,10,.85);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .loading-box{
+    background:var(--ink-2); border:1px solid var(--oak); border-radius:14px;
+    padding:20px 26px; min-width:220px; text-align:center; box-shadow:var(--shadow);
+  }
+  #loadingOverlayText{color:var(--parchment); font-size:14px; margin-bottom:12px;}
+  .loading-bar-track{background:rgba(255,255,255,.12); border-radius:6px; height:10px; overflow:hidden;}
+  .loading-bar-fill{background:linear-gradient(90deg,var(--oak-light),var(--oak)); height:100%; width:0%; transition:width .1s linear;}
   #levelHud{
     position:absolute; top:calc(64px + env(safe-area-inset-top)); left:50%; z-index:13;
     transform:translateX(-50%);
@@ -1056,7 +1074,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v3.14</div>
+  <div id="versionLabel">v4.00</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1135,31 +1153,18 @@ try {
     <div id="infoControls"></div>
   </div>
   <div class="panel" id="menuPanel">
-    <div class="group-label">Game</div>
+    <div class="group-label">Save/Load</div>
     <div class="group">
       <button id="saveBtn" title="Save to this browser">💾<small>Save</small></button>
       <button id="loadBtn" title="Load from this browser">📂<small>Load</small></button>
       <button id="resetBtn" title="Start over">🔄<small>Reset</small></button>
     </div>
-    <div class="group-label" style="margin-top:10px;">Backup file</div>
-    <div class="group">
+    <div class="group" style="margin-top:6px;">
       <button id="exportBtn" title="Export / share your build">📤<small>Export</small></button>
       <button id="importBtn" title="Import from a file">📥<small>Import</small></button>
       <input type="file" id="loadFileInput" accept="application/json,.json,.txt,text/plain" style="display:none;">
     </div>
-    <div class="group-label" style="margin-top:10px;">Build</div>
-    <div class="group">
-      <button class="btn wide" id="partsListBtn">🧾 Parts list<small>Briqs used</small></button>
-    </div>
-    <div class="group-label" style="margin-top:10px;">Levels</div>
-    <div class="group">
-      <button class="btn wide" id="levelsBtn">🎯 Levels<small>Guided challenges</small></button>
-    </div>
-    <div class="group-label" style="margin-top:10px;">View</div>
-    <div class="group">
-      <button class="btn" id="gridToggleBtn">▦<small>Grid</small></button>
-    </div>
-    <div class="group-label" style="margin-top:10px;">Day / Night</div>
+    <div class="group-label" style="margin-top:10px;">Night / Day</div>
     <div class="group" style="align-items:center; flex-wrap:nowrap;">
       <span style="font-size:15px; flex-shrink:0;">🌙</span>
       <input type="range" id="dayNightSlider" min="0" max="100" value="100" style="flex:1; min-width:0;">
@@ -1171,6 +1176,19 @@ try {
       <button class="btn" data-env="dschungel">🌴<small>Jungle</small></button>
       <button class="btn" data-env="berge">⛰<small>Mountains</small></button>
       <button class="btn" data-env="innenstadt">🏙<small>City</small></button>
+    </div>
+    <div class="group-label" style="margin-top:10px;">Build</div>
+    <div class="group">
+      <button class="btn wide" id="partsListBtn">🧾 Parts list<small>Briqs used</small></button>
+    </div>
+    <!-- Levels is temporarily off the menu (its own code — LEVELS,
+         startLevel, exitLevel, the whole build-slot system — is left
+         completely intact for when it comes back later; only this one
+         entry point is hidden, not removed, so nothing downstream
+         breaks in the meantime). -->
+    <div class="group-label" style="margin-top:10px; display:none;">Levels</div>
+    <div class="group" style="display:none;">
+      <button class="btn wide" id="levelsBtn">🎯 Levels<small>Guided challenges</small></button>
     </div>
     <div class="group-label" style="margin-top:10px;">Options</div>
     <div class="group">
@@ -1377,6 +1395,10 @@ try {
           <input type="range" id="joystickVposSlider" min="30" max="85" value="50" step="5">
         </div>
         <div class="settings-row">
+          <span class="settings-label">Grid</span>
+          <button class="btn" id="gridToggleBtn">▦<small>Grid</small></button>
+        </div>
+        <div class="settings-row">
           <span class="settings-label">Play area size <small id="worldRadiusLabel"></small></span>
           <input type="range" id="worldRadiusSlider" min="12" max="300" value="18" step="1">
         </div>
@@ -1398,6 +1420,13 @@ try {
       <div class="modal-footer">
         <button class="cta ghost" id="qrCloseBtn" style="width:100%;">Close</button>
       </div>
+    </div>
+  </div>
+
+  <div id="loadingOverlay" style="display:none;">
+    <div class="loading-box">
+      <div id="loadingOverlayText">Loading...</div>
+      <div class="loading-bar-track"><div id="loadingOverlayBar" class="loading-bar-fill"></div></div>
     </div>
   </div>
 
@@ -11091,7 +11120,7 @@ function proceedPastTeamSelection() {
   const migratedId = migrateOldAutosaveIfNeeded();
   if (migratedId) {
     const slot = readSaveSlots().find(s => s.id === migratedId);
-    if (slot) applyLoadedData(slot.data);
+    if (slot) applyLoadedDataWithProgress(slot.data);
     return;
   }
   if (readSaveSlots().length === 0) {
@@ -11171,7 +11200,13 @@ function serializeState() {
     });
   }
   const decorList = placedDecor.map(d => ({ type: d.type, x: d.x, z: d.z, y: d.y || 0, rotY: d.rotY, scale: d.scale || 1 }));
-  return { version: 4, cellM: CELL_M, env: currentEnv, envProps: envPropLayouts[currentEnv] || null, bricks: list, decor: decorList };
+  // worldRadius travels with the save/export itself (not just as a
+  // local device setting) so a shared build always opens at the same
+  // play area size it was actually built in — loading a build made on
+  // a much larger area onto a device still set to the small default
+  // would otherwise make bricks near the original edges look like
+  // they're sitting "outside the world".
+  return { version: 5, cellM: CELL_M, env: currentEnv, envProps: envPropLayouts[currentEnv] || null, bricks: list, decor: decorList, worldRadius: WORLD_MAX };
 }
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -11276,9 +11311,21 @@ function resetGame() {
 // Shared restore core: takes an already-parsed save object and rebuilds
 // the scene from it. Both the file Import path (loadGame, below) and the
 // in-browser Load-slot path funnel through this single implementation.
+// Deliberately plain and fully synchronous — see applyLoadedDataWithProgress
+// below for the version real UI call sites actually use, which wraps this
+// exact same logic with a visible progress bar for large saves without
+// changing what "loading" itself means or how its result is checked.
 function applyLoadedData(data) {
   if (!data || !Array.isArray(data.bricks)) return false;
   if (data.env && ENVIRONMENTS[data.env]) setEnvironment(data.env, Array.isArray(data.envProps) ? data.envProps : null);
+  // Older saves (before version 5) never recorded their own play area
+  // size at all — nothing to restore for those, so the device's own
+  // current setting is simply left as-is, exactly like before this
+  // field existed.
+  if (typeof data.worldRadius === 'number' && !isNaN(data.worldRadius)) {
+    setWorldRadius(data.worldRadius);
+    document.getElementById('worldRadiusSlider').value = String(WORLD_MAX);
+  }
   clearAllBricks();
   undoStack.length = 0; // a freshly loaded build has no meaningful undo history of its own
   redoStack.length = 0; // nor anything to redo INTO it — a leftover redo entry from the previous build would paste ghost pieces into this newly loaded world
@@ -11305,14 +11352,104 @@ function applyLoadedData(data) {
   updateHud();
   return true;
 }
+function nextFrame() { return new Promise((resolve) => requestAnimationFrame(resolve)); }
+function showLoadingOverlay(text) {
+  document.getElementById('loadingOverlayText').textContent = text || 'Loading...';
+  document.getElementById('loadingOverlayBar').style.width = '0%';
+  document.getElementById('loadingOverlay').style.display = 'flex';
+}
+function updateLoadingProgress(fraction) {
+  document.getElementById('loadingOverlayBar').style.width = Math.max(0, Math.min(100, Math.round(fraction * 100))) + '%';
+}
+function hideLoadingOverlay() {
+  document.getElementById('loadingOverlay').style.display = 'none';
+}
+// A large save can mean placing many hundreds or even thousands of
+// Briqs/Deko — doing that in one single synchronous pass (applyLoadedData
+// above) blocks the whole page for however long it takes, with the
+// browser never getting a chance to paint anything in between, which is
+// exactly what looks and feels like the game has simply hung. This is
+// the version real UI entry points (the Load menu, file Import) actually
+// call: for a big save, it re-does the exact same placement work in small
+// chunks, yielding to the browser via a real animation frame (not just a
+// Promise microtask, which wouldn't actually let the browser repaint)
+// between each one — the loading overlay's own progress bar, AND the
+// normal render loop, both get a chance to actually update as it goes.
+//
+// Deliberately kept entirely separate from applyLoadedData itself rather
+// than folding the chunking logic into it directly: applyLoadedData is
+// relied on throughout the game's own test suite as a single plain
+// synchronous call whose effects are immediately checkable on the very
+// next line — turning it into an async function broke that assumption
+// everywhere it's used, since ordinary sequential script execution
+// doesn't wait for a Promise it never awaits, letting LATER unrelated
+// code interleave with an in-progress load in ways the whole test suite
+// never accounted for. Splitting this into its own async wrapper keeps
+// applyLoadedData exactly as simple and synchronous as it always was.
+const LOADING_OVERLAY_THRESHOLD = 150; // total Briqs + Deko combined
+const LOAD_CHUNK_SIZE = 80;
+async function applyLoadedDataWithProgress(data) {
+  if (!data || !Array.isArray(data.bricks)) return false;
+  const totalItems = data.bricks.length + (Array.isArray(data.decor) ? data.decor.length : 0);
+  if (totalItems <= LOADING_OVERLAY_THRESHOLD) return applyLoadedData(data); // small enough that the plain synchronous path is already instant — no reason to force even one extra animation frame of delay onto it
+  if (data.env && ENVIRONMENTS[data.env]) setEnvironment(data.env, Array.isArray(data.envProps) ? data.envProps : null);
+  if (typeof data.worldRadius === 'number' && !isNaN(data.worldRadius)) {
+    setWorldRadius(data.worldRadius);
+    document.getElementById('worldRadiusSlider').value = String(WORLD_MAX);
+  }
+  clearAllBricks();
+  undoStack.length = 0;
+  redoStack.length = 0;
+  clearAllDecor();
+  let skippedUnknown = 0;
+  showLoadingOverlay('Loading your build\u2026');
+  await nextFrame(); // let the overlay itself actually paint before the heavy work below ever starts
+  let processed = 0;
+  for (const entry of data.bricks) {
+    if (entry.isRoof) {
+      placeRoofBlock(entry.x0, entry.x1, entry.z0, entry.z1, entry.yLow, entry.yHigh, entry.slopeAxis, entry.material, true);
+    } else if (entry.isSlab) {
+      placeSlabBlock(entry.x0, entry.x1, entry.y, entry.z0, entry.z1, entry.mainType, entry.color || null, true);
+    } else if (!placeBrick([entry.x, entry.y, entry.z], entry.len, entry.orientation, entry.mainType, entry.studded, true, entry.color || null)) {
+      skippedUnknown++;
+    }
+    processed++;
+    if (processed % LOAD_CHUNK_SIZE === 0) {
+      updateLoadingProgress(processed / totalItems);
+      await nextFrame();
+    }
+  }
+  const decorList = Array.isArray(data.decor) ? data.decor : [];
+  for (const entry of decorList) {
+    addDecor(entry.type, entry.x, entry.z, entry.rotY, entry.y || 0, true, entry.scale || 1);
+    processed++;
+    if (processed % LOAD_CHUNK_SIZE === 0) {
+      updateLoadingProgress(processed / totalItems);
+      await nextFrame();
+    }
+  }
+  if (skippedUnknown > 0) alert(skippedUnknown + ' piece(s) in this save use a wall type that no longer exists in this version (the removed WS20) and were skipped — the rest of the build loaded normally.');
+  syncUndoRedoButtons();
+  updateHud();
+  hideLoadingOverlay();
+  return true;
+}
 function loadGame(jsonText) {
   let data;
   try { data = JSON.parse(jsonText); } catch (e) { alert('This file is not a valid save game.'); return; }
   if (!applyLoadedData(data)) alert('This file is not a valid save game.');
 }
+// Progress-bar-aware counterpart to loadGame, for the real file Import
+// UI path — see applyLoadedDataWithProgress's own comment for why this
+// is kept separate rather than making loadGame itself async.
+async function loadGameWithProgress(jsonText) {
+  let data;
+  try { data = JSON.parse(jsonText); } catch (e) { alert('This file is not a valid save game.'); return; }
+  if (!(await applyLoadedDataWithProgress(data))) alert('This file is not a valid save game.');
+}
 
 /* ---- In-browser save slots (multiple named saves + autosave) ---- */
-const SAVE_SLOTS_KEY = 'briqsite_save_slots_v1';
+const SAVE_SLOTS_KEY = 'briqsite_save_slots_v1'; // legacy localStorage key — no longer the live source of truth, but still where a one-time migration reads FROM the first time this runs on a given browser
 const AUTOSAVE_KEY = 'briqsite_autosave_v1'; // legacy — retired in favour of autosaving into a NAMED slot, kept only so migrateOldAutosaveIfNeeded() can still find and absorb anyone's pre-existing one
 const CURRENT_SLOT_KEY = 'briqsite_current_slot_v1'; // which named slot autosave now targets
 function getCurrentSlotId() {
@@ -11325,16 +11462,158 @@ function setCurrentSlotId(id) {
   } catch (e) { /* best-effort */ }
 }
 
-function readSaveSlots() {
+/* ---------------- Save slots now live in IndexedDB, not localStorage ----------------
+   A full build's own JSON (thousands of Briqs/Deko) can run into the
+   several-hundred-KB to low-single-digit-MB range — several such saves
+   together routinely exceed localStorage's own hard ~5MB-per-origin
+   ceiling (the same small ceiling every OTHER site on the same browser
+   shares too), where IndexedDB's is typically hundreds of MB to several
+   GB. Every OTHER, much smaller piece of saved state (achievements,
+   settings, which team was chosen, ...) stays in localStorage exactly
+   as before — none of that was ever what filled the quota up, so
+   there's nothing to gain moving it and no reason to touch it.
+
+   readSaveSlots()/writeSaveSlots() keep the EXACT SAME synchronous
+   signature every existing call site (Save/Load modals, autosave,
+   migration, delete) already assumes — genuinely synchronous IndexedDB
+   access doesn't exist, so both now work against an in-memory cache
+   that mirrors whatever's actually in IndexedDB, kept up to date in the
+   background. This deliberately avoids the same mistake made (and
+   caught before it shipped) with the loading-progress-bar work earlier:
+   turning the single shared read/write API itself into something
+   callers must await would have meant re-checking every single one of
+   its many call sites for correctness one at a time, for no benefit —
+   the actual slow part (talking to IndexedDB) can just as well happen
+   quietly in the background instead. */
+const IDB_NAME = 'briqsite_saves_v1';
+const IDB_SLOTS_STORE = 'slots';
+let idbInstance = null;
+function openIdb() {
+  return new Promise((resolve, reject) => {
+    if (idbInstance) { resolve(idbInstance); return; }
+    if (typeof indexedDB === 'undefined') { reject(new Error('IndexedDB unavailable')); return; }
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_SLOTS_STORE)) db.createObjectStore(IDB_SLOTS_STORE, { keyPath: 'id' });
+    };
+    req.onsuccess = (e) => { idbInstance = e.target.result; resolve(idbInstance); };
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+function idbGetAllSlots() {
+  return openIdb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_SLOTS_STORE, 'readonly');
+    const req = tx.objectStore(IDB_SLOTS_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  }));
+}
+function idbPutSlot(slot) {
+  return openIdb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_SLOTS_STORE, 'readwrite');
+    tx.objectStore(IDB_SLOTS_STORE).put(slot);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+function idbDeleteSlot(id) {
+  return openIdb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_SLOTS_STORE, 'readwrite');
+    tx.objectStore(IDB_SLOTS_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+// Synchronous starting value — correct immediately, with zero async
+// dependency, exactly the way this used to work before IndexedDB
+// entered the picture at all. This is what every single line of
+// existing code that touches a save slot keeps reading/writing against
+// without ever having to wait for anything: initSaveSlotsFromIdb below
+// quietly UPGRADES this to IndexedDB's own copy a moment later, but
+// nothing anywhere is written to assume that upgrade has already
+// happened by any particular point — it's a background improvement,
+// never a precondition.
+let cachedSaveSlots = (() => {
   try {
     const raw = localStorage.getItem(SAVE_SLOTS_KEY);
     const arr = raw ? JSON.parse(raw) : [];
     return Array.isArray(arr) ? arr : [];
   } catch (e) { return []; }
+})();
+// Resolves once cachedSaveSlots has been handed over to IndexedDB as
+// its actual backing store (see initSaveSlotsFromIdb's own comment) —
+// nothing in the game actually needs to await this for correctness
+// (see cachedSaveSlots's own comment just above), but the test suite
+// uses it to verify the hand-over itself happens the way it's meant to.
+let saveSlotsReadyPromise = initSaveSlotsFromIdb();
+// Asks the browser not to silently evict this site's storage under its
+// own automatic "running low on device disk space" cleanup — best
+// effort only (some browsers grant this outright, others only for
+// bookmarked/installed sites, and none of them guarantee it), and
+// doesn't protect against someone explicitly clearing their own
+// browser data, which is a deliberate user action this can't and
+// shouldn't try to prevent. Fired once, here, and never awaited or
+// otherwise blocked on — there's nothing else to do differently
+// whether it's granted or not.
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().catch(() => { /* best-effort */ });
+}
+async function initSaveSlotsFromIdb() {
+  try {
+    let slots = await idbGetAllSlots();
+    if (slots.length === 0 && cachedSaveSlots.length > 0) {
+      // IndexedDB is empty but the synchronous localStorage-based
+      // starting value (above) already has real slots in it — a
+      // returning player on their very first visit after this
+      // migration. Copied over exactly once. Deliberately NOT deleted
+      // from localStorage afterward: it costs nothing to leave lying
+      // there as an extra safety net, and there's no urgency to
+      // reclaim those few MB now that ongoing saves live somewhere
+      // with far more room anyway.
+      for (const slot of cachedSaveSlots) await idbPutSlot(slot);
+      slots = cachedSaveSlots;
+    }
+    cachedSaveSlots = slots;
+  } catch (e) {
+    // IndexedDB itself unavailable (rare — some locked-down private-
+    // browsing configurations block it entirely) — cachedSaveSlots
+    // simply keeps its synchronous, localStorage-sourced value from
+    // above; the game still works, just without the larger storage
+    // ceiling this migration is for.
+    console.error('IndexedDB unavailable, continuing with the localStorage-based save slots already in memory', e);
+  }
+}
+function readSaveSlots() {
+  return cachedSaveSlots;
 }
 function writeSaveSlots(slots) {
-  try { localStorage.setItem(SAVE_SLOTS_KEY, JSON.stringify(slots)); return true; }
-  catch (e) { alert('Could not save: browser storage is full or unavailable.'); return false; }
+  const prevIds = new Set(cachedSaveSlots.map((s) => s.id));
+  const newIds = new Set(slots.map((s) => s.id));
+  const removedIds = [...prevIds].filter((id) => !newIds.has(id));
+  cachedSaveSlots = slots;
+  persistSlotChanges(slots, removedIds);
+  return true;
+}
+// The actual IndexedDB write, run in the background — writeSaveSlots
+// itself already returned by the time this settles, matching how every
+// existing caller was already written (none of them ever awaited or
+// checked writeSaveSlots's own return value in the first place).
+// Failure here (IndexedDB unavailable, or some other write error) still
+// leaves the in-memory cache correct for the rest of THIS session — the
+// person can keep playing and even keep saving within the session — but
+// is surfaced with an alert since it means nothing will actually
+// survive a page reload, which they'd otherwise only discover much
+// later by simply finding their save gone.
+async function persistSlotChanges(slots, removedIds) {
+  try {
+    for (const id of removedIds) await idbDeleteSlot(id);
+    for (const slot of slots) await idbPutSlot(slot);
+  } catch (e) {
+    console.error('Failed to persist save slots to IndexedDB', e);
+    alert('Could not write to this browser\u2019s storage, so this won\u2019t survive closing the page. Your build is still here for now \u2014 exporting it to a file is the safest backup until this is sorted out.');
+  }
 }
 function readAutosave() {
   try {
@@ -11552,7 +11831,7 @@ function renderLoadModal() {
     list.appendChild(makeSlotRow(slot.name, slot.ts, {
       isCurrent,
       onClick: () => {
-        const doLoad = () => { setCurrentSlotId(slot.id); applyLoadedData(slot.data); closeLoadModal(); };
+        const doLoad = async () => { setCurrentSlotId(slot.id); await applyLoadedDataWithProgress(slot.data); closeLoadModal(); };
         if (hasAnyBuild()) showConfirm('Load save?', `Load "${slot.name}"? This replaces your current build.`, doLoad);
         else doLoad();
       },
@@ -11617,7 +11896,7 @@ document.getElementById('loadFileInput').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => loadGame(reader.result);
+  reader.onload = () => loadGameWithProgress(reader.result);
   reader.readAsText(file);
   e.target.value = '';
 });
@@ -11695,6 +11974,40 @@ function drawScreenshotWatermark(ctx, w, h) {
   ctx.fill();
   ctx.fillStyle = '#f3e8d2';
   ctx.fillText('BriqSite', pillX + paddingX, pillY + pillH / 2 + fontSize * 0.04);
+  drawScreenshotTeamBadge(ctx, w, h);
+}
+// A second, equally understated pill in the OPPOSITE corner (bottom-
+// left, so it never competes with or crowds the BriqSite mark above)
+// naming whichever team the player picked — "Team VKE" or "Team
+// TriqBriq", the exact same names shown on the team-selection cards
+// themselves, not just an unlabelled logo, so it actually reads as team
+// pride rather than a mystery mark. Skipped entirely if, somehow,
+// no team was ever recorded (shouldn't normally happen, since picking
+// one is the very first thing every player does, but there's nothing
+// sensible to print otherwise).
+function drawScreenshotTeamBadge(ctx, w, h) {
+  const label = selectedTeam === 'vke' ? 'Team VKE' : selectedTeam === 'triqbriq' ? 'Team TriqBriq' : null;
+  if (!label) return;
+  const fontSize = Math.max(14, Math.round(h * 0.024));
+  const paddingX = fontSize * 0.7, paddingY = fontSize * 0.45;
+  const marginX = Math.round(w * 0.02), marginY = Math.round(h * 0.02);
+  ctx.font = `700 ${fontSize}px 'Fraunces', serif`;
+  ctx.textBaseline = 'middle';
+  const textW = ctx.measureText(label).width;
+  const pillW = textW + paddingX * 2, pillH = fontSize + paddingY * 2;
+  const pillX = marginX, pillY = h - marginY - pillH;
+  const r = pillH / 2;
+  ctx.fillStyle = 'rgba(32,24,15,0.55)';
+  ctx.beginPath();
+  ctx.moveTo(pillX + r, pillY);
+  ctx.arcTo(pillX + pillW, pillY, pillX + pillW, pillY + pillH, r);
+  ctx.arcTo(pillX + pillW, pillY + pillH, pillX, pillY + pillH, r);
+  ctx.arcTo(pillX, pillY + pillH, pillX, pillY, r);
+  ctx.arcTo(pillX, pillY, pillX + pillW, pillY, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#f3e8d2';
+  ctx.fillText(label, pillX + paddingX, pillY + pillH / 2 + fontSize * 0.04);
 }
 async function shareScreenshot() {
   const blob = await captureScreenshotBlob();

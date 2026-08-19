@@ -1074,7 +1074,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v4.00</div>
+  <div id="versionLabel">v4.00-copyright2</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1151,6 +1151,7 @@ try {
     </ul>
     <div class="group-label" style="margin-top:10px;">Controls</div>
     <div id="infoControls"></div>
+    <div class="sub" style="margin-top:14px; opacity:0.65; font-size:12px; text-align:center;">© 2026 Kevin Kupper — all rights reserved</div>
   </div>
   <div class="panel" id="menuPanel">
     <div class="group-label">Save/Load</div>
@@ -1340,6 +1341,25 @@ try {
         <button class="cta ghost" id="exportCancelBtn">Cancel</button>
         <button class="cta ghost" id="exportDownloadBtn">Download</button>
         <button class="cta" id="exportShareBtn">Share</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shown on import only when the name derived from the chosen file
+       already matches an existing save slot exactly — see
+       importFileAsNewSlot's own comment for why a raw filename can
+       collide even though export names are timestamped by default. -->
+  <div class="modal-bg" id="importNameConflictModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-scroll">
+        <h2>⚠️ Name already exists</h2>
+        <div class="sub" id="importNameConflictSub">A save named "..." already exists. Choose a different name for the imported save.</div>
+        <input type="text" id="importNameConflictInput" placeholder="Save name" maxlength="60">
+        <div class="sub" id="importNameConflictMsg" style="color:#e08a8a; min-height:1.2em;"></div>
+      </div>
+      <div class="modal-footer row">
+        <button class="cta ghost" id="importNameConflictCancelBtn">Cancel</button>
+        <button class="cta" id="importNameConflictConfirmBtn" disabled>Import</button>
       </div>
     </div>
   </div>
@@ -11218,14 +11238,34 @@ function downloadBlob(blob, filename) {
   a.remove();
   URL.revokeObjectURL(url);
 }
-// Default export file name: briqsite-savegame-YYYYMMDD-HHMM, in the
-// player's own local time (matches what they'd expect from a timestamp
-// on their own device, not a fixed timezone).
+// Default export file name. Uses the CURRENTLY ACTIVE save slot's own
+// name as the base — whatever the player already called their save —
+// rather than the fixed literal "briqsite-savegame" every export used
+// to share regardless of which build it actually was. The
+// YYYYMMDD-HHMM timestamp (player's own local time) still always
+// follows it, unchanged: that part exists so two exports of the same
+// save on different days never collide on disk, which has nothing to
+// do with what the save is actually called.
+function currentSlotName() {
+  const id = getCurrentSlotId();
+  if (!id) return null;
+  const slot = readSaveSlots().find((s) => s.id === id);
+  return slot ? slot.name : null;
+}
+// Filenames can't contain a handful of characters save-slot names are
+// otherwise free to use (a save could be named "Castle: Phase 2/3" —
+// perfectly fine as a slot name, not fine on disk on Windows or
+// Android). Replaced with "_" rather than stripped outright, so the
+// separation between words the player intended stays visible.
+function sanitizeForFilename(name) {
+  return name.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+}
 function defaultExportName() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
-  return `briqsite-savegame-${stamp}`;
+  const base = sanitizeForFilename(currentSlotName() || 'briqsite-savegame');
+  return `${base}-${stamp}`;
 }
 function exportFileName() {
   const input = document.getElementById('exportNameInput');
@@ -11447,6 +11487,113 @@ async function loadGameWithProgress(jsonText) {
   try { data = JSON.parse(jsonText); } catch (e) { alert('This file is not a valid save game.'); return; }
   if (!(await applyLoadedDataWithProgress(data))) alert('This file is not a valid save game.');
 }
+
+/* ---- Importing a FILE creates a brand-new named save slot ----
+   Kept entirely separate from loadGameWithProgress above (which still
+   exists exactly as before, and is still what the test suite exercises
+   directly): that one loads data straight into whatever's currently
+   open, with no concept of a slot at all. Real file Import is
+   different on purpose — a file dropped in from outside the browser
+   should become ITS OWN save, named after the file, not silently
+   overwrite (or get folded into) whatever the player happened to have
+   open at the time. */
+function isValidSaveData(data) {
+  return !!(data && Array.isArray(data.bricks));
+}
+// A player's own filename, minus extension and minus a trailing
+// timestamp EXACTLY in the shape defaultExportName produces
+// (-YYYYMMDD-HHMM) — so re-importing one of BriqSite's own earlier
+// exports recovers the original save name cleanly instead of getting
+// "My Castle-20260818-2015" as the slot name forever after. A filename
+// that merely looks similar but isn't quite that exact shape is left
+// fully alone rather than guessed at — better to keep an unexpected
+// suffix than silently mangle a name that was never a timestamp at all.
+function baseNameFromImportFilename(filename) {
+  let name = filename.replace(/\.(txt|json)$/i, '');
+  name = name.replace(/-\d{8}-\d{4}$/, '');
+  name = sanitizeForFilename(name);
+  return name || 'Imported Save';
+}
+function existingSlotNames() { return new Set(readSaveSlots().map((s) => s.name)); }
+// The exact "-1, or -2 if -1 is already taken too, etc." rule asked
+// for — checked against every OTHER existing name, not just the one
+// that just collided, so this can't suggest a SECOND name that's also
+// already taken.
+function firstFreeSuffixedName(baseName, names) {
+  let n = 1;
+  while (names.has(`${baseName}-${n}`)) n++;
+  return `${baseName}-${n}`;
+}
+async function createSlotFromImportAndLoad(name, data) {
+  const slots = readSaveSlots();
+  const id = genSlotId();
+  slots.push({ id, name, ts: Date.now(), data });
+  writeSaveSlots(slots);
+  setCurrentSlotId(id);
+  await applyLoadedDataWithProgress(data);
+}
+let importConflictPendingData = null;
+function closeImportNameConflictModal() {
+  document.getElementById('importNameConflictModal').style.display = 'none';
+  importConflictPendingData = null;
+}
+// Re-checked on every keystroke (not just once when the popup opens):
+// the whole point is the Confirm button only ever becomes pressable
+// once the CURRENT text in the box is actually free, not whatever it
+// happened to be pre-filled with.
+function updateImportNameConflictValidity() {
+  const input = document.getElementById('importNameConflictInput');
+  const msg = document.getElementById('importNameConflictMsg');
+  const confirmBtn = document.getElementById('importNameConflictConfirmBtn');
+  const name = input.value.trim();
+  if (!name) {
+    msg.textContent = 'Please enter a name.';
+    confirmBtn.disabled = true;
+  } else if (existingSlotNames().has(name)) {
+    msg.textContent = `"${name}" is already in use \u2014 pick a different name.`;
+    confirmBtn.disabled = true;
+  } else {
+    msg.textContent = '';
+    confirmBtn.disabled = false;
+  }
+}
+function openImportNameConflictModal(baseName, data) {
+  importConflictPendingData = data;
+  document.getElementById('importNameConflictSub').textContent = `A save named "${baseName}" already exists. Choose a different name for the imported save.`;
+  document.getElementById('importNameConflictInput').value = firstFreeSuffixedName(baseName, existingSlotNames());
+  updateImportNameConflictValidity();
+  document.getElementById('importNameConflictModal').style.display = 'flex';
+}
+async function importFileAsNewSlot(filename, jsonText) {
+  let data;
+  try { data = JSON.parse(jsonText); } catch (e) { alert('This file is not a valid save game.'); return; }
+  if (!isValidSaveData(data)) { alert('This file is not a valid save game.'); return; }
+  const baseName = baseNameFromImportFilename(filename);
+  if (!existingSlotNames().has(baseName)) {
+    await createSlotFromImportAndLoad(baseName, data);
+  } else {
+    openImportNameConflictModal(baseName, data);
+  }
+}
+document.getElementById('importNameConflictInput').addEventListener('input', updateImportNameConflictValidity);
+document.getElementById('importNameConflictCancelBtn').addEventListener('click', closeImportNameConflictModal);
+document.getElementById('importNameConflictModal').addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'importNameConflictModal') closeImportNameConflictModal();
+});
+document.getElementById('importNameConflictConfirmBtn').addEventListener('click', async () => {
+  const input = document.getElementById('importNameConflictInput');
+  const name = input.value.trim();
+  // Re-validated again right here, exactly as asked for — the live
+  // per-keystroke check above already keeps the button disabled for
+  // any name that was colliding AT THE TIME someone typed it, but a
+  // second import finishing in the background (or, on paper, another
+  // tab) between then and this click could still have taken the name
+  // in the meantime.
+  if (!name || existingSlotNames().has(name)) { updateImportNameConflictValidity(); return; }
+  const data = importConflictPendingData;
+  closeImportNameConflictModal();
+  await createSlotFromImportAndLoad(name, data);
+});
 
 /* ---- In-browser save slots (multiple named saves + autosave) ---- */
 const SAVE_SLOTS_KEY = 'briqsite_save_slots_v1'; // legacy localStorage key — no longer the live source of truth, but still where a one-time migration reads FROM the first time this runs on a given browser
@@ -11896,7 +12043,7 @@ document.getElementById('loadFileInput').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => loadGameWithProgress(reader.result);
+  reader.onload = () => importFileAsNewSlot(file.name, reader.result);
   reader.readAsText(file);
   e.target.value = '';
 });

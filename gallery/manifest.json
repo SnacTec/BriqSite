@@ -4,6 +4,13 @@
     "name": "Beach Villa",
     "thumbnail": "gallery/beachvilla.png",
     "file": "gallery/beachvilla.json",
+    "description": "By SnacTec"
+  },
+  {
+    "id": "forest",
+    "name": "Forest",
+    "thumbnail": "gallery/forest.png",
+    "file": "gallery/forest.json",
     "description": "SnacTec"
   }
 ]

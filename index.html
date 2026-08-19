@@ -1085,7 +1085,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v5.10</div>
+  <div id="versionLabel">v5.11</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1177,7 +1177,7 @@ try {
       <input type="file" id="loadFileInput" accept="application/json,.json,.txt,text/plain" style="display:none;">
     </div>
     <div class="group" style="margin-top:6px;">
-      <button class="btn wide" id="galleryBtn">🖼️ Beispielprojekte<small>Von der BriqSite-Galerie laden</small></button>
+      <button class="btn wide" id="galleryBtn">🖼️ Gallery<small>Load an example build</small></button>
     </div>
     <div class="group-label" style="margin-top:10px;">Night / Day</div>
     <div class="group" style="align-items:center; flex-wrap:nowrap;">
@@ -1389,11 +1389,11 @@ try {
   <div class="modal-bg" id="galleryModal" style="display:none;">
     <div class="modal">
       <div class="modal-scroll">
-        <h2>🖼️ Beispielprojekte</h2>
-        <div class="sub">Fertige Bauten zum Anschauen und Laden — als eigener neuer Spielstand.</div>
+        <h2>🖼️ Gallery</h2>
+        <div class="sub">Finished builds to browse and load — as your own new save.</div>
 
         <div id="galleryListView">
-          <input type="text" id="gallerySearchInput" placeholder="Suchen…" style="display:none;">
+          <input type="text" id="gallerySearchInput" placeholder="Search…" style="display:none;">
           <div class="sub" id="galleryStatus"></div>
           <div id="galleryGrid"></div>
         </div>
@@ -11665,7 +11665,7 @@ async function loadGalleryManifest() {
     galleryEntries = data.filter(isValidGalleryEntry); // silently skip malformed individual entries rather than failing the whole gallery over one bad one
   } catch (e) {
     galleryEntries = null;
-    galleryLoadError = 'Beispielprojekte konnten nicht geladen werden. Pr\u00fcfe deine Internetverbindung.';
+    galleryLoadError = 'Could not load the example gallery. Check your internet connection.';
   }
   renderGalleryList();
 }
@@ -11683,14 +11683,14 @@ function renderGalleryList() {
   statusEl.onclick = null;
   statusEl.style.cursor = '';
   if (galleryLoadError) {
-    statusEl.textContent = galleryLoadError + ' (zum erneuten Versuch tippen)';
+    statusEl.textContent = galleryLoadError + ' (tap to retry)';
     searchEl.style.display = 'none';
     statusEl.style.cursor = 'pointer';
-    statusEl.onclick = () => { statusEl.onclick = null; statusEl.style.cursor = ''; statusEl.textContent = 'L\u00e4dt\u2026'; loadGalleryManifest(); };
+    statusEl.onclick = () => { statusEl.onclick = null; statusEl.style.cursor = ''; statusEl.textContent = 'Loading\u2026'; loadGalleryManifest(); };
     return;
   }
   if (galleryEntries === null) {
-    statusEl.textContent = 'L\u00e4dt\u2026';
+    statusEl.textContent = 'Loading\u2026';
     searchEl.style.display = 'none';
     return;
   }
@@ -11699,12 +11699,12 @@ function renderGalleryList() {
   // clutter above an already-short list.
   searchEl.style.display = galleryEntries.length > 8 ? '' : 'none';
   if (galleryEntries.length === 0) {
-    statusEl.textContent = 'Noch keine Beispielprojekte verf\u00fcgbar.';
+    statusEl.textContent = 'No example builds available yet.';
     return;
   }
   const entries = filteredGalleryEntries();
   if (entries.length === 0) {
-    statusEl.textContent = 'Keine Treffer.';
+    statusEl.textContent = 'No matches.';
     return;
   }
   statusEl.textContent = '';
@@ -11754,7 +11754,7 @@ function openGalleryModal() {
   showGalleryListView();
   document.getElementById('galleryModal').style.display = 'flex';
   const needsLoad = galleryEntries === null && !galleryLoadError;
-  renderGalleryList(); // shows "L\u00e4dt\u2026" immediately if a (re)load is about to happen, or whatever's already cached otherwise
+  renderGalleryList(); // shows "Loading\u2026" immediately if a (re)load is about to happen, or whatever's already cached otherwise
   if (needsLoad) loadGalleryManifest();
 }
 function closeGalleryModal() {

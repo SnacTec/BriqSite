@@ -773,6 +773,17 @@ try {
   }
   .modal-footer.row{display:flex; gap:8px;}
   .modal-footer.row .cta{width:auto; flex:1;}
+  /* Gallery grid: 2 columns of tappable thumbnail cards. Search input
+     reuses the same plain text-input styling as everything else in a
+     modal (exportNameInput, importNameConflictInput) — no dedicated
+     class needed, `input[type=text]` is already styled globally. */
+  #galleryGrid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:8px;}
+  .gallery-item{
+    background:rgba(0,0,0,.2); border:1px solid rgba(201,138,75,.3); border-radius:10px;
+    overflow:hidden; cursor:pointer; text-align:left;
+  }
+  .gallery-item img{width:100%; aspect-ratio:4/3; object-fit:cover; display:block; background:rgba(255,255,255,.05);}
+  .gallery-item .gallery-item-name{padding:6px 8px; font-size:12.5px; color:var(--parchment);}
   .modal .cta.ghost{
     background:transparent; border:1px solid rgba(201,138,75,.4); color:var(--parchment);
   }
@@ -1074,7 +1085,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v5.00</div>
+  <div id="versionLabel">v5.10</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1164,6 +1175,9 @@ try {
       <button id="exportBtn" title="Export / share your build">📤<small>Export</small></button>
       <button id="importBtn" title="Import from a file">📥<small>Import</small></button>
       <input type="file" id="loadFileInput" accept="application/json,.json,.txt,text/plain" style="display:none;">
+    </div>
+    <div class="group" style="margin-top:6px;">
+      <button class="btn wide" id="galleryBtn">🖼️ Beispielprojekte<small>Von der BriqSite-Galerie laden</small></button>
     </div>
     <div class="group-label" style="margin-top:10px;">Night / Day</div>
     <div class="group" style="align-items:center; flex-wrap:nowrap;">
@@ -1360,6 +1374,42 @@ try {
       <div class="modal-footer row">
         <button class="cta ghost" id="importNameConflictCancelBtn">Cancel</button>
         <button class="cta" id="importNameConflictConfirmBtn" disabled>Import</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- BriqSite Gallery: a curated list of example builds, hosted as
+       plain static files (a JSON manifest + one JSON save + one
+       thumbnail per entry) alongside the game itself — no backend, no
+       accounts, same "single static site" philosophy as everything
+       else here. Two sub-views inside one modal, toggled via their own
+       display style rather than being separate modals: LIST (search +
+       grid of thumbnails) and PREVIEW (large image + Load/Back) — see
+       showGalleryList/showGalleryPreview. -->
+  <div class="modal-bg" id="galleryModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-scroll">
+        <h2>🖼️ Beispielprojekte</h2>
+        <div class="sub">Fertige Bauten zum Anschauen und Laden — als eigener neuer Spielstand.</div>
+
+        <div id="galleryListView">
+          <input type="text" id="gallerySearchInput" placeholder="Suchen…" style="display:none;">
+          <div class="sub" id="galleryStatus"></div>
+          <div id="galleryGrid"></div>
+        </div>
+
+        <div id="galleryPreviewView" style="display:none;">
+          <img id="galleryPreviewImg" src="" alt="" style="width:100%; border-radius:10px; display:block; background:rgba(255,255,255,.05);">
+          <h3 id="galleryPreviewName" style="margin:10px 0 4px;"></h3>
+          <div class="sub" id="galleryPreviewDesc"></div>
+        </div>
+      </div>
+      <div class="modal-footer row" id="galleryListFooter">
+        <button class="cta ghost" id="galleryCloseBtn">Close</button>
+      </div>
+      <div class="modal-footer row" id="galleryPreviewFooter" style="display:none;">
+        <button class="cta ghost" id="galleryPreviewBackBtn">Back</button>
+        <button class="cta" id="galleryPreviewLoadBtn">Load</button>
       </div>
     </div>
   </div>
@@ -11564,17 +11614,176 @@ function openImportNameConflictModal(baseName, data) {
   updateImportNameConflictValidity();
   document.getElementById('importNameConflictModal').style.display = 'flex';
 }
-async function importFileAsNewSlot(filename, jsonText) {
+// Shared by both the file-picker Import flow AND the Gallery's "Load"
+// button: given a proposed save name and raw JSON text, validate it and
+// either create the slot outright or open the name-conflict popup —
+// the exact same "already taken" handling either way, so a gallery
+// entry that collides with something the player already has saved
+// (including a SECOND gallery entry with the same display name) gets
+// the identical -1/-2/... treatment as a colliding filename would.
+async function importDataAsNewSlot(baseName, jsonText) {
   let data;
   try { data = JSON.parse(jsonText); } catch (e) { alert('This file is not a valid save game.'); return; }
   if (!isValidSaveData(data)) { alert('This file is not a valid save game.'); return; }
-  const baseName = baseNameFromImportFilename(filename);
   if (!existingSlotNames().has(baseName)) {
     await createSlotFromImportAndLoad(baseName, data);
   } else {
     openImportNameConflictModal(baseName, data);
   }
 }
+async function importFileAsNewSlot(filename, jsonText) {
+  await importDataAsNewSlot(baseNameFromImportFilename(filename), jsonText);
+}
+
+/* ---- BriqSite Gallery: curated example builds, hosted as plain
+   static files right alongside the game itself (a JSON manifest, one
+   JSON save + one thumbnail per entry) — no backend, no accounts, same
+   "single static site" philosophy as the rest of BriqSite. Manifest
+   format expected at GALLERY_MANIFEST_URL, a JSON array of:
+     { "id": "strandhaus", "name": "Strandhaus",
+       "thumbnail": "gallery/strandhaus.jpg", "file": "gallery/strandhaus.json",
+       "description": "optional short text" }
+   Paths are relative to index.html, so they work the same whether the
+   game sits at the domain root or in a subfolder. Loading an entry
+   funnels through the exact same importDataAsNewSlot the file-picker
+   Import already uses — a gallery pick becomes a real, independent,
+   properly-named save slot, including the same name-conflict handling. */
+const GALLERY_MANIFEST_URL = 'gallery/manifest.json';
+let galleryEntries = null;       // null = not loaded yet; array once loaded (possibly empty)
+let galleryLoadError = null;
+let gallerySelectedEntry = null; // the entry currently shown in the preview sub-view, if any
+function isValidGalleryEntry(e) {
+  return !!(e && typeof e.id === 'string' && typeof e.name === 'string' && typeof e.thumbnail === 'string' && typeof e.file === 'string');
+}
+async function loadGalleryManifest() {
+  galleryLoadError = null;
+  try {
+    const res = await fetch(GALLERY_MANIFEST_URL);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!Array.isArray(data)) throw new Error('manifest is not a list');
+    galleryEntries = data.filter(isValidGalleryEntry); // silently skip malformed individual entries rather than failing the whole gallery over one bad one
+  } catch (e) {
+    galleryEntries = null;
+    galleryLoadError = 'Beispielprojekte konnten nicht geladen werden. Pr\u00fcfe deine Internetverbindung.';
+  }
+  renderGalleryList();
+}
+function filteredGalleryEntries() {
+  if (!galleryEntries) return [];
+  const q = (document.getElementById('gallerySearchInput').value || '').trim().toLowerCase();
+  if (!q) return galleryEntries;
+  return galleryEntries.filter((e) => e.name.toLowerCase().includes(q));
+}
+function renderGalleryList() {
+  const statusEl = document.getElementById('galleryStatus');
+  const gridEl = document.getElementById('galleryGrid');
+  const searchEl = document.getElementById('gallerySearchInput');
+  gridEl.innerHTML = '';
+  statusEl.onclick = null;
+  statusEl.style.cursor = '';
+  if (galleryLoadError) {
+    statusEl.textContent = galleryLoadError + ' (zum erneuten Versuch tippen)';
+    searchEl.style.display = 'none';
+    statusEl.style.cursor = 'pointer';
+    statusEl.onclick = () => { statusEl.onclick = null; statusEl.style.cursor = ''; statusEl.textContent = 'L\u00e4dt\u2026'; loadGalleryManifest(); };
+    return;
+  }
+  if (galleryEntries === null) {
+    statusEl.textContent = 'L\u00e4dt\u2026';
+    searchEl.style.display = 'none';
+    return;
+  }
+  // The search box only earns its place on screen once there's actually
+  // enough to search through \u2014 for a handful of entries it's pure
+  // clutter above an already-short list.
+  searchEl.style.display = galleryEntries.length > 8 ? '' : 'none';
+  if (galleryEntries.length === 0) {
+    statusEl.textContent = 'Noch keine Beispielprojekte verf\u00fcgbar.';
+    return;
+  }
+  const entries = filteredGalleryEntries();
+  if (entries.length === 0) {
+    statusEl.textContent = 'Keine Treffer.';
+    return;
+  }
+  statusEl.textContent = '';
+  for (const entry of entries) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'gallery-item';
+    const img = document.createElement('img');
+    img.src = entry.thumbnail;
+    img.alt = entry.name;
+    img.onerror = () => { img.style.display = 'none'; }; // a missing/broken thumbnail shouldn't take the whole card down with it
+    const label = document.createElement('div');
+    label.className = 'gallery-item-name';
+    label.textContent = entry.name;
+    card.appendChild(img);
+    card.appendChild(label);
+    card.addEventListener('click', () => openGalleryPreview(entry));
+    gridEl.appendChild(card);
+  }
+}
+function showGalleryListView() {
+  document.getElementById('galleryListView').style.display = '';
+  document.getElementById('galleryPreviewView').style.display = 'none';
+  document.getElementById('galleryListFooter').style.display = '';
+  document.getElementById('galleryPreviewFooter').style.display = 'none';
+}
+function showGalleryPreviewView() {
+  document.getElementById('galleryListView').style.display = 'none';
+  document.getElementById('galleryPreviewView').style.display = '';
+  document.getElementById('galleryListFooter').style.display = 'none';
+  document.getElementById('galleryPreviewFooter').style.display = '';
+}
+function openGalleryPreview(entry) {
+  gallerySelectedEntry = entry;
+  document.getElementById('galleryPreviewImg').src = entry.thumbnail;
+  document.getElementById('galleryPreviewName').textContent = entry.name;
+  document.getElementById('galleryPreviewDesc').textContent = entry.description || '';
+  showGalleryPreviewView();
+}
+function closeGalleryPreview() {
+  gallerySelectedEntry = null;
+  showGalleryListView();
+}
+function openGalleryModal() {
+  closeAllPopups();
+  document.getElementById('gallerySearchInput').value = '';
+  showGalleryListView();
+  document.getElementById('galleryModal').style.display = 'flex';
+  const needsLoad = galleryEntries === null && !galleryLoadError;
+  renderGalleryList(); // shows "L\u00e4dt\u2026" immediately if a (re)load is about to happen, or whatever's already cached otherwise
+  if (needsLoad) loadGalleryManifest();
+}
+function closeGalleryModal() {
+  document.getElementById('galleryModal').style.display = 'none';
+  gallerySelectedEntry = null;
+}
+async function loadSelectedGalleryEntry() {
+  const entry = gallerySelectedEntry;
+  if (!entry) return;
+  let jsonText;
+  try {
+    const res = await fetch(entry.file);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    jsonText = await res.text();
+  } catch (e) {
+    alert('This example could not be loaded. Please check your internet connection.');
+    return;
+  }
+  closeGalleryModal();
+  await importDataAsNewSlot(entry.name, jsonText);
+}
+document.getElementById('galleryBtn').addEventListener('click', openGalleryModal);
+document.getElementById('galleryCloseBtn').addEventListener('click', closeGalleryModal);
+document.getElementById('galleryModal').addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'galleryModal') closeGalleryModal();
+});
+document.getElementById('gallerySearchInput').addEventListener('input', renderGalleryList);
+document.getElementById('galleryPreviewBackBtn').addEventListener('click', closeGalleryPreview);
+document.getElementById('galleryPreviewLoadBtn').addEventListener('click', loadSelectedGalleryEntry);
 document.getElementById('importNameConflictInput').addEventListener('input', updateImportNameConflictValidity);
 document.getElementById('importNameConflictCancelBtn').addEventListener('click', closeImportNameConflictModal);
 document.getElementById('importNameConflictModal').addEventListener('click', (e) => {

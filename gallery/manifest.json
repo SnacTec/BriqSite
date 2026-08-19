@@ -1,0 +1,9 @@
+[
+  {
+    "id": "beachvilla",
+    "name": "Beach Villa",
+    "thumbnail": "gallery/beachvilla.png",
+    "file": "gallery/beachvilla.json",
+    "description": "SnacTec"
+  }
+]

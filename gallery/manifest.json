@@ -4,7 +4,14 @@
     "name": "Beach Villa",
     "thumbnail": "gallery/beachvilla.png",
     "file": "gallery/beachvilla.json",
-    "description": "By SnacTec"
+    "description": "SnacTec"
+  },
+  {
+    "id": "vketrq",
+    "name": "VKE TriqBriq",
+    "thumbnail": "gallery/vketrq.png",
+    "file": "gallery/vketrq.json",
+    "description": "SnacTec"
   },
   {
     "id": "forest",

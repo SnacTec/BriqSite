@@ -1085,7 +1085,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v5.11</div>
+  <div id="versionLabel">v5.12</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -6911,7 +6911,20 @@ document.addEventListener('mousemove', (e) => {
 
 /* ---------------- Desktop keyboard movement ---------------- */
 const keys = {};
+// True while the keyboard focus is on any text-entry element (a save
+// name, the gallery search box, the export filename, the name-conflict
+// popup, etc.) — every single-key game shortcut below (F to build, R
+// to rotate, Z to toggle studs, Tab, Space...) must stay completely out
+// of the way in that case, or normal typing silently loses whichever
+// letters happen to double as a shortcut (F and R were the two anyone
+// would hit constantly) while ALSO firing the game action in the
+// background purely as a side effect of typing a save name.
+function isTypingTarget(el) {
+  if (!el) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true;
+}
 window.addEventListener('keydown', (e) => {
+  if (isTypingTarget(e.target)) return; // let the browser handle every keystroke as normal text input — none of the shortcuts below apply while typing
   keys[e.code] = true;
   // Ctrl/Cmd shortcuts take priority over the plain single-key bindings
   // below and return early — otherwise Ctrl+Z (universal Undo muscle

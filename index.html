@@ -1085,7 +1085,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v5.13</div>
+  <div id="versionLabel">v5.30</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1119,6 +1119,7 @@ try {
       <button class="btn active" data-type="WS25" data-studded="true">WS25mZ</button>
       <button class="btn" data-type="WS25" data-studded="false">WS25oZ</button>
       <button class="btn" id="platteBtn" data-type="PLATTE">Floor</button>
+      <button class="btn" id="dachBtn" data-type="DACH">Roof</button>
     </div>
   </div>
   <div id="colorPanel" class="ui-scalable">
@@ -1176,6 +1177,13 @@ try {
       <button id="importBtn" title="Import from a file">📥<small>Import</small></button>
       <input type="file" id="loadFileInput" accept="application/json,.json,.txt,text/plain" style="display:none;">
     </div>
+    <!-- Two players, not one, specifically so a crossfade can have BOTH
+         the outgoing and incoming track playing at once, briefly — one
+         fading down while the other fades up. Which one is "active"
+         (audible right now) swaps back and forth; see startMusicTrack's
+         own comment. -->
+    <audio id="musicPlayerA" preload="auto" style="display:none;"></audio>
+    <audio id="musicPlayerB" preload="auto" style="display:none;"></audio>
     <div class="group" style="margin-top:6px;">
       <button class="btn wide" id="galleryBtn">🖼️ Gallery<small>Load an example build</small></button>
     </div>
@@ -1445,7 +1453,11 @@ try {
           <button class="btn active" id="soundToggleBtn">🔊<small>On</small></button>
         </div>
         <div class="settings-row">
-          <span class="settings-label">Free mode <small>(build beside, not just on top)</small></span>
+          <span class="settings-label">Music</span>
+          <button class="btn active" id="musicToggleBtn">🎵<small>On</small></button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Free mode <small>(build without needing any support)</small></span>
           <button class="btn" id="freeModeToggleBtn">🧱<small>Off</small></button>
         </div>
         <div class="settings-row">
@@ -2512,7 +2524,173 @@ function setEnvironment(key, savedLayout) {
   // point — the buttons' own active-state highlighting already shows
   // which one is selected, so there's nothing left needing this here.)
   document.querySelectorAll('#envMenuGroup .btn').forEach(b => b.classList.toggle('active', b.dataset.env === key));
+  // Crossfades into this environment's own music playlist — a no-op
+  // before the player's first interaction (see unlockMusicOnFirstInteraction's
+  // own comment on why playback can't start any earlier than that
+  // regardless) or with Music turned off, so this is always safe to
+  // call unconditionally here rather than needing its own guard at
+  // every one of setEnvironment's own call sites.
+  startMusicForEnvironment(key, true);
 }
+/* ---------------- Background music ---------------- */
+// Hosted as plain static files right alongside the game itself, same
+// "single static site" philosophy as the Gallery and everything else —
+// a manifest naming which tracks belong to which environment, plus the
+// tracks themselves, in a `music/` folder next to index.html. Missing
+// entirely (nothing uploaded yet, or a 404) is treated the same way a
+// failed Gallery fetch is: fails quietly, the rest of the game is
+// completely unaffected, nothing shown to the player about it.
+const MUSIC_MANIFEST_URL = 'music/manifest.json';
+const MUSIC_ENABLED_KEY = 'briqsite_music_enabled_v1';
+let musicEnabled = true;
+try { const s = localStorage.getItem(MUSIC_ENABLED_KEY); if (s !== null) musicEnabled = s === '1'; } catch (e) { /* best-effort */ }
+function setMusicEnabled(v) {
+  musicEnabled = !!v;
+  try { localStorage.setItem(MUSIC_ENABLED_KEY, musicEnabled ? '1' : '0'); } catch (e) { /* best-effort */ }
+  if (musicEnabled) { if (musicUnlocked) startMusicForEnvironment(currentEnv, true); }
+  else stopAllMusic();
+}
+let musicManifest = null;      // { envKey: [url, url, ...] }, null until the fetch resolves (or fails)
+let musicManifestLoading = false;
+let musicUnlocked = false;     // true only after a real user gesture — browsers block audio.play() before that
+let musicEnvKey = null;        // which environment's playlist is currently active
+let musicTrackIndex = 0;       // position within musicEnvKey's own FIXED-order track list
+let musicActivePlayer = 'A';   // which of the two <audio> elements is the currently-audible one
+let musicGeneration = 0;       // bumped on every environment switch / stop, so a stale in-flight crossfade (from BEFORE a rapid re-switch) can recognise it's obsolete and quietly abandon itself rather than stomping on the newer one
+const MUSIC_VOLUME = 0.4;      // kept under sound effects' own headroom on purpose — this plays continuously, effects are brief accents on top of it
+const MUSIC_CROSSFADE_MS = 1800;
+function getMusicPlayer(which) { return document.getElementById(which === 'A' ? 'musicPlayerA' : 'musicPlayerB'); }
+// Explicitly silenced at 0 up front — a real <audio> element's own
+// implicit default (1, full volume) isn't relied on here, so neither
+// player is ever briefly audible at the wrong level before the first
+// crossfade has actually had a chance to set it deliberately.
+getMusicPlayer('A').volume = 0;
+getMusicPlayer('B').volume = 0;
+async function loadMusicManifestIfNeeded() {
+  if (musicManifest || musicManifestLoading) return;
+  musicManifestLoading = true;
+  try {
+    const res = await fetch(MUSIC_MANIFEST_URL);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('manifest is not an object');
+    musicManifest = data;
+  } catch (e) {
+    musicManifest = {}; // treated as "no music available" — quiet, no player-facing error
+  } finally {
+    musicManifestLoading = false;
+  }
+}
+function musicTrackUrl(envKey, index) {
+  const list = musicManifest && musicManifest[envKey];
+  if (!list || list.length === 0) return null;
+  return list[((index % list.length) + list.length) % list.length];
+}
+// The ONE entry point for both "an environment was (re)selected" and "a
+// track just finished and the next one in the same environment's own
+// fixed order should start" — both are exactly the same operation (fade
+// to a specific track), just with a different URL/track index picked
+// beforehand. `resetTrack` is true for an actual environment switch
+// (always start that environment's own list from its first track), and
+// false when simply advancing within the SAME environment's list.
+async function startMusicForEnvironment(envKey, resetTrack) {
+  if (!musicEnabled || !musicUnlocked) return;
+  await loadMusicManifestIfNeeded();
+  const myGeneration = ++musicGeneration;
+  if (resetTrack || musicEnvKey !== envKey) { musicEnvKey = envKey; musicTrackIndex = 0; }
+  const url = musicTrackUrl(envKey, musicTrackIndex);
+  if (!url) return; // nothing configured for this environment (or manifest failed) — silence, not an error
+  await crossfadeToTrack(url, myGeneration);
+}
+async function advanceToNextTrack() {
+  if (!musicEnabled || !musicUnlocked || !musicEnvKey) return;
+  const myGeneration = ++musicGeneration;
+  musicTrackIndex++; // musicTrackUrl itself wraps back to the start — this is the whole "endlos abwechselnd" loop
+  const url = musicTrackUrl(musicEnvKey, musicTrackIndex);
+  if (!url) return;
+  await crossfadeToTrack(url, myGeneration);
+}
+function stopAllMusic() {
+  musicGeneration++; // invalidate any fade in progress
+  for (const which of ['A', 'B']) {
+    const p = getMusicPlayer(which);
+    p.pause();
+    p.currentTime = 0;
+    p.volume = 0;
+    p.oncanplaythrough = null;
+  }
+  musicEnvKey = null;
+}
+// Fades the CURRENTLY audible player's volume down to 0 while the
+// OTHER player (already loading `url` in the background) fades up to
+// full — both genuinely playing at once for the short overlap, which
+// is what makes it a crossfade rather than a stop-then-start. Swaps
+// which player counts as "active" once the fade completes, and wires
+// that new active player's own `ended` handler to advance to the next
+// track automatically — the actual mechanism behind the endless,
+// alternating playback.
+function crossfadeToTrack(url, myGeneration) {
+  return new Promise((resolve) => {
+    const outgoing = getMusicPlayer(musicActivePlayer);
+    const incomingWhich = musicActivePlayer === 'A' ? 'B' : 'A';
+    const incoming = getMusicPlayer(incomingWhich);
+    incoming.oncanplaythrough = null;
+    incoming.src = url;
+    incoming.volume = 0;
+    incoming.currentTime = 0;
+    incoming.onended = null; // only ever the ACTIVE player's own ended handler should be armed — see below, once this one takes over
+    const beginFade = () => {
+      if (myGeneration !== musicGeneration) return; // a newer switch already started — this one is stale, abandon quietly rather than fighting it
+      const startedAt = performance.now();
+      const outgoingStartVolume = outgoing.volume;
+      function step() {
+        if (myGeneration !== musicGeneration) return; // superseded mid-fade
+        const t = Math.min(1, (performance.now() - startedAt) / MUSIC_CROSSFADE_MS);
+        incoming.volume = MUSIC_VOLUME * t;
+        outgoing.volume = outgoingStartVolume * (1 - t);
+        if (t < 1) { requestAnimationFrame(step); return; }
+        outgoing.pause();
+        outgoing.currentTime = 0;
+        outgoing.onended = null;
+        musicActivePlayer = incomingWhich;
+        incoming.onended = () => advanceToNextTrack();
+        resolve();
+      }
+      step();
+    };
+    incoming.play().then(beginFade).catch(() => { /* blocked or the source failed to load — quietly give up this one fade, nothing else in the game depends on it */ });
+  });
+}
+document.getElementById('musicToggleBtn').addEventListener('click', () => {
+  setMusicEnabled(!musicEnabled);
+  const btn = document.getElementById('musicToggleBtn');
+  btn.classList.toggle('active', musicEnabled);
+  btn.innerHTML = musicEnabled ? '🎵<small>On</small>' : '🎵<small>Off</small>';
+});
+// The button's own HTML defaults to "On" (matching musicEnabled's
+// default) — but musicEnabled may have just been overridden by a
+// PERSISTED value loaded from localStorage above, for a returning
+// player who'd turned it off — sync the button's visible state to
+// whatever actually loaded, once, right here at startup.
+{
+  const btn = document.getElementById('musicToggleBtn');
+  btn.classList.toggle('active', musicEnabled);
+  btn.innerHTML = musicEnabled ? '🎵<small>On</small>' : '🎵<small>Off</small>';
+}
+// Real playback can only ever start from inside a genuine user gesture
+// — browsers block it otherwise, same restriction getAudioCtx() above
+// already works around for sound effects. A single one-time listener
+// at the window level catches whichever interaction happens to be the
+// player's actual FIRST one (choosing a team, but also covers a
+// returning player whose team is already picked and skips straight
+// into the game) rather than hanging this off one specific button.
+function unlockMusicOnFirstInteraction() {
+  if (musicUnlocked) return;
+  musicUnlocked = true;
+  if (musicEnabled) return startMusicForEnvironment(currentEnv, true);
+}
+window.addEventListener('pointerdown', unlockMusicOnFirstInteraction, { once: true });
+
 setEnvironment(currentEnv);
 
 // Placing a Briq where a decorative prop stands must clear that prop out
@@ -5720,6 +5898,17 @@ function cellsFree(cells) {
    top of a Platte, and a Platte may cap any type, since it isn't a wall
    system of its own at all. */
 function structuralCheck(fp, mainType) {
+  // Free Mode: skip the entire structural check — a Briq may float with
+  // nothing touching it in any direction, and the "different wall types
+  // can't sit directly on each other" rule (below) doesn't apply either
+  // — both are "is this ALLOWED to be built here" rules, and Free Mode
+  // means exactly that there are none of those left, only the separate,
+  // more basic "is this exact space already taken" collision check
+  // (handled entirely elsewhere, in isPlacementValid/cellsFree) still
+  // applies — you still can't build two Briqs into the same cells, but
+  // nothing about support or wall-type mixing is checked at all any
+  // more once this is on.
+  if (freeMode) return { ok: true };
   if (fp.y0 <= 0) return { ok: true };
   let supported = 0;
   const belowIds = new Set();
@@ -5727,29 +5916,6 @@ function structuralCheck(fp, mainType) {
     for (let z = fp.z0; z <= fp.z1; z++) {
       const id = occupancy.get(key(x, fp.y0 - 1, z));
       if (id !== undefined) { supported++; belowIds.add(id); }
-    }
-  }
-  // Free Mode: a Briq may ALSO count as supported by touching an
-  // existing Briq on its SIDE or END, at the same course — not only by
-  // resting on something directly underneath. This is checked only as
-  // a fallback (nothing changes when support from below already
-  // exists), and only ever ADDS placement freedom on top of the normal
-  // rule, never removes the normal "something must actually be there"
-  // requirement entirely — a Briq floating with nothing touching it in
-  // ANY direction is still rejected either way.
-  if (supported === 0 && freeMode) {
-    outer:
-    for (let y = fp.y0; y <= fp.y1; y++) {
-      for (const x of [fp.x0 - 1, fp.x1 + 1]) {
-        for (let z = fp.z0; z <= fp.z1; z++) {
-          if (occupancy.has(key(x, y, z))) { supported = 1; break outer; }
-        }
-      }
-      for (const z of [fp.z0 - 1, fp.z1 + 1]) {
-        for (let x = fp.x0; x <= fp.x1; x++) {
-          if (occupancy.has(key(x, y, z))) { supported = 1; break outer; }
-        }
-      }
     }
   }
   if (supported === 0) {
@@ -8386,6 +8552,61 @@ function getRoofBodyGeo(slantLen, thickness, width) {
 // roof than the solid itself actually occupies.
 // Shared by the real placement AND the ghost preview, so both always
 // agree exactly on where/how a roof panel sits.
+// A roof panel resting flush with its two clicked corners looks odd —
+// real roofs overhang the walls they sit on ("Dachüberstand"/eaves).
+// Deliberately kept OUT of computeRoofTransform itself (below): that
+// function's own geoDimX/geoDimZ/position describe the panel's exact,
+// literal shape between the two clicked corners — the thing several
+// existing tests pin down precisely, and the thing roofCellsFor's own
+// occupancy/collision math is built on. The overhang is a purely
+// cosmetic RENDERING addition on top of that, computed here as its own
+// separate step, applied only where a mesh actually gets built (both
+// the ghost preview and the real placed panel share this one call so
+// they can never show something different from what gets built).
+//
+// Applied asymmetrically ON PURPOSE: the full overhang on the WIDTH
+// (perpendicular-to-slope) sides, but along the SLOPE direction only at
+// the LOW end, never the high end. A gable roof is built from two
+// separate panels meeting at a shared ridge at their own high ends —
+// overhanging THAT edge too would push both panels past the ridge line
+// into each other, visibly overlapping right where they're supposed to
+// meet cleanly. The low end (the eave, resting on a wall) has no such
+// neighbour to clash with, so it's the one place the overhang is both
+// wanted and safe by default.
+const ROOF_OVERHANG_M = CELL_M; // one grid cell (5cm) of eave overhang per side
+function applyRoofOverhang(t, slopeAxis) {
+  // Recover the same (dirAlong, dirUp) unit direction computeRoofTransform
+  // used internally, from the angle it already computed — cos/sin of the
+  // rotation angle IS exactly that direction, so there's no need to
+  // duplicate run/rise here or risk it drifting out of sync with them.
+  // dAlong always points from the position-low end toward the
+  // position-high end (that's just how atan2(rise,run) is built); dUp's
+  // SIGN, though, is what actually tells low HEIGHT from high height —
+  // positive for an ordinary rising panel (ridge at position-high),
+  // negative for a legitimately DECLINING one (ridge at position-low
+  // instead — see doRoofAction's own comment on why that's a real,
+  // supported case, not an error). The eave (where the overhang
+  // belongs) is always the LOWER-HEIGHT end, whichever position that
+  // happens to be at — so it's dUp's sign that must decide which end of
+  // the box actually grows, not just "always the position-low end".
+  const angle = slopeAxis === 'x' ? t.rotation.z : -t.rotation.x;
+  const dAlong = Math.cos(angle), dUp = Math.sin(angle);
+  const eaveSign = dUp < 0 ? 1 : -1; // rising/flat: eave at position-low (−1, unchanged from before); declining: eave at position-high (+1)
+  const overhungSlantLen = t.slantLen + ROOF_OVERHANG_M;
+  const overhungWidthMeters = t.widthMeters + ROOF_OVERHANG_M * 2; // symmetric — both width edges are genuinely open, no ridge concern here
+  // Growing the box by ROOF_OVERHANG_M on ONLY its eave end means
+  // extending its total length by that amount while shifting its centre
+  // half that far TOWARD the eave — the ridge end then lands exactly
+  // where it always did, while the eave end moves further out.
+  const shiftAlong = eaveSign * (ROOF_OVERHANG_M / 2) * dAlong;
+  const shiftUp = eaveSign * (ROOF_OVERHANG_M / 2) * dUp;
+  const position = slopeAxis === 'x'
+    ? { x: t.position.x + shiftAlong, y: t.position.y + shiftUp, z: t.position.z }
+    : { x: t.position.x, y: t.position.y + shiftUp, z: t.position.z + shiftAlong };
+  const geoDimX = slopeAxis === 'x' ? overhungSlantLen : overhungWidthMeters;
+  const geoDimZ = slopeAxis === 'x' ? overhungWidthMeters : overhungSlantLen;
+  return { position, rotation: t.rotation, thickness: t.thickness, geoDimX, geoDimZ };
+}
 function computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis) {
   const crossCells = BRIQ_CATALOG.DACH.crossCells;
   const lowAlong = (slopeAxis === 'x' ? x0 : z0) * CELL_M;
@@ -8420,17 +8641,111 @@ function computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis) {
   const geoDimZ = slopeAxis === 'x' ? widthMeters : slantLen;
   return { position, rotation, slantLen, thickness, widthMeters, geoDimX, geoDimZ };
 }
+// A roof panel is a single straight/flat plane between its two clicked
+// corners — but the walls supporting it are usually more than one
+// cell wide, and a wall's own top is CONSTANT across its whole width
+// while a straight interpolated line is not. The two only truly agree
+// at the exact column the tall corner was clicked on; every OTHER
+// column across that same wall's own width computes a height a little
+// LOWER than the wall's real, constant top — which used to make the
+// roof's own computed cells collide with the wall's own topmost course
+// everywhere except that one exact spot, rejecting completely ordinary
+// placements (e.g. clicking a wall's outer/far corner instead of its
+// inner/near one) that have nothing actually wrong with them.
+// Bumping a column's computed height up to clear whatever's already
+// built directly beneath it — never down — fixes exactly that: the
+// roof still renders as the same single straight panel (nothing here
+// touches computeRoofTransform or the mesh itself), but its own
+// LOGICAL/collision cells never come out UNDER real support.
+//
+// The height at any position along the slope is a plain linear
+// function of that one coordinate — shared here so the exact-cell
+// generation below, the fast validity check, and the fast per-column
+// support lookup can never quietly drift apart from each other.
+function roofHeightAtAlong(posAlong, lowAlong, highAlong, yLow, yHigh) {
+  const alongSpan = highAlong - lowAlong;
+  const t = alongSpan !== 0 ? (posAlong - lowAlong) / alongSpan : 0;
+  return Math.round(yLow + t * (yHigh - yLow));
+}
+// Every existing Briq/Platte/Dach whose own footprint's bounding box
+// overlaps the roof's — gathered ONCE per check by scanning `bricks`
+// itself (typically a few hundred to a few thousand entries even for a
+// large build) rather than the roof's own CELL count (which for a
+// house-sized panel can be in the hundreds of thousands). This is the
+// actual fix for the "extreme stutter on a large roof" report: the old
+// per-COLUMN occupancy search scaled with the roof's own huge area;
+// this scales with how much is actually BUILT nearby, which is nearly
+// always far smaller.
+function roofOverlapCandidates(x0, x1, z0, z1) {
+  const out = [];
+  for (const b of bricks.values()) {
+    const fp = b.footprint;
+    if (fp.x1 < x0 || fp.x0 >= x1 || fp.z1 < z0 || fp.z0 >= z1) continue; // bounding boxes don't even touch
+    out.push(b);
+  }
+  return out;
+}
+// The FAST validity check — no per-cell arrays, no per-column
+// occupancy scanning. For every candidate whose footprint genuinely
+// overlaps the roof's, the roof's own height is a straight (monotonic)
+// line along the slope axis, so its LOWEST point within any sub-range
+// is always at one of that sub-range's own two ends — checking those
+// two ends is mathematically enough to know the minimum across the
+// whole overlap, without visiting a single point in between.
+//
+// A candidate poking above that minimum is allowed to become
+// SUPPORT the roof rests on (its own final per-column height gets
+// raised there — see roofSupportHeightForColumn) — but only up to the
+// roof's own declared max(yLow, yHigh). A candidate reaching higher
+// than that isn't "a wall this roof should meet", it's something
+// genuinely in the way (a chimney, a tower, anything taller than
+// either end the roof was actually asked to span) and correctly blocks
+// placement instead of being silently built into.
+function roofWouldCollide(x0, x1, z0, z1, yLow, yHigh, slopeAxis) {
+  const lowAlong = slopeAxis === 'x' ? x0 : z0;
+  const highAlong = slopeAxis === 'x' ? x1 : z1;
+  const maxAllowed = Math.max(yLow, yHigh);
+  const candidates = roofOverlapCandidates(x0, x1, z0, z1);
+  for (const b of candidates) {
+    const fp = b.footprint;
+    const ox0 = Math.max(x0, fp.x0), ox1 = Math.min(x1 - 1, fp.x1);
+    const oz0 = Math.max(z0, fp.z0), oz1 = Math.min(z1 - 1, fp.z1);
+    if (ox0 > ox1 || oz0 > oz1) continue; // bounding boxes touched, but no cell actually shared
+    const alongMin = slopeAxis === 'x' ? ox0 : oz0;
+    const alongMax = slopeAxis === 'x' ? ox1 : oz1;
+    const h1 = roofHeightAtAlong(alongMin, lowAlong, highAlong, yLow, yHigh);
+    const h2 = roofHeightAtAlong(alongMax, lowAlong, highAlong, yLow, yHigh);
+    const minRoofHeightHere = Math.min(h1, h2);
+    const candidateTop = fp.y1 + 1; // one past this candidate's own topmost occupied cell
+    if (candidateTop > minRoofHeightHere && candidateTop > maxAllowed) return true; // genuinely in the way, not supportable
+  }
+  return false;
+}
+// The exact per-column support height, but computed against the SAME
+// small candidate list roofWouldCollide already gathered — not a fresh
+// occupancy scan for every single column. Only used at the moment a
+// roof is actually being built (once per placement), never per frame.
+function roofSupportHeightForColumn(x, z, hAtPos, candidates) {
+  let best = hAtPos;
+  for (const b of candidates) {
+    const fp = b.footprint;
+    if (x < fp.x0 || x > fp.x1 || z < fp.z0 || z > fp.z1) continue;
+    const top = fp.y1 + 1;
+    if (top > best) best = top;
+  }
+  return best;
+}
 function roofCellsFor(x0, x1, z0, z1, yLow, yHigh, slopeAxis, crossCells) {
   const lowAlong = slopeAxis === 'x' ? x0 : z0;
   const highAlong = slopeAxis === 'x' ? x1 : z1;
-  const alongSpan = highAlong - lowAlong;
+  const candidates = roofOverlapCandidates(x0, x1, z0, z1);
   const cells = [];
   for (let x = x0; x < x1; x++) {
     for (let z = z0; z < z1; z++) {
       const posAlong = slopeAxis === 'x' ? x : z;
-      const t = alongSpan !== 0 ? (posAlong - lowAlong) / alongSpan : 0;
-      const hAtPos = Math.round(yLow + t * (yHigh - yLow));
-      for (let dy = 0; dy < crossCells; dy++) cells.push([x, hAtPos + dy, z]);
+      const hAtPos = roofHeightAtAlong(posAlong, lowAlong, highAlong, yLow, yHigh);
+      const finalH = roofSupportHeightForColumn(x, z, hAtPos, candidates);
+      for (let dy = 0; dy < crossCells; dy++) cells.push([x, finalH + dy, z]);
     }
   }
   return cells;
@@ -8447,10 +8762,21 @@ function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force)
   // overlap it. Following the actual slope avoids that false collision
   // while still correctly blocking anything that really is in the
   // panel's own way.
+  // The FAST validity check runs first (no per-cell arrays at all) —
+  // rejects outright, cheaply, before ever generating a single cell.
+  // The exact cellsFree(cells) check right after stays as the final
+  // authoritative safety net (now cheap too, since generating `cells`
+  // itself no longer does a fresh occupancy scan per column) — belt
+  // and suspenders, not redundant busywork: roofWouldCollide reasons
+  // about candidates' own bounding boxes, while this confirms the
+  // ACTUAL final cells (after every column's own support bump) are
+  // genuinely free, covering rarer multi-structure edge cases the fast
+  // check's simpler reasoning doesn't need to chase.
+  if (!force && roofWouldCollide(x0, x1, z0, z1, yLow, yHigh, slopeAxis)) return null;
   const cells = roofCellsFor(x0, x1, z0, z1, yLow, yHigh, slopeAxis, crossCells);
   if (!force && !cellsFree(cells)) return null;
 
-  const t = computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis);
+  const t = applyRoofOverhang(computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis), slopeAxis);
   const bodyGeo = getRoofBodyGeo(t.geoDimX, t.thickness, t.geoDimZ);
   const bodyMat = getRoofBodyMat(material);
   const body = new THREE.Mesh(bodyGeo, bodyMat);
@@ -8774,6 +9100,7 @@ function playBreakSound() {
 }
 function playRemoveSound() { playBreakSound(); }
 function setSoundEnabled(v) { soundEnabled = !!v; }
+
 
 /* ---------------- Achievements ---------------- */
 // Persisted per-BROWSER (localStorage), same as the control-mode
@@ -9722,19 +10049,59 @@ function copyGroundXZ(hit) {
 // — this still always finds a genuinely non-overlapping height, just
 // without promising every mixed piece lands exactly on ITS OWN natural
 // course boundary the way a same-type stack does.
-function computeCopyPasteRestY(entries, dx, dz) {
+// Packed numeric key for a full (x,y,z) cell — used only by the
+// clipboard preview's own VIRTUAL support tracking below, where
+// lookups run potentially hundreds of thousands of times for a large
+// clipboard; at that volume the per-lookup STRING allocation a plain
+// template-literal key would cost is itself a measurable, avoidable
+// cost. 32768/65536 give x/z headroom far beyond any reachable world
+// coordinate; y<4096 comfortably covers any realistic build height.
+function packedCellKey(x, y, z) { return ((x + 32768) * 65536 + (z + 32768)) * 4096 + y; }
+// The collective X/Z bounding box of a whole clipboard's entries, in
+// their own LOCAL (pre-shift) coordinates — cheap (one pass over the
+// entries themselves, not their cells) and lets the world-candidate
+// gather below happen ONCE for the whole clipboard, rather than once
+// per entry or, worse, once per cell.
+function entriesBoundingBoxXZ(entries) {
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  const scratch = {}; // one reused object for the whole loop — see entryFootprintAt's own comment
+  for (const e of entries) {
+    entryFootprintAt(e, 0, 0, 0, scratch);
+    if (scratch.x0 < x0) x0 = scratch.x0;
+    if (scratch.x1 > x1) x1 = scratch.x1;
+    if (scratch.z0 < z0) z0 = scratch.z0;
+    if (scratch.z1 > z1) z1 = scratch.z1;
+  }
+  return { x0, x1, z0, z1 };
+}
+function computeCopyPasteRestY(entries, dx, dz, precomputedCandidates) {
   const types = new Set(entries.map((e) => e.mainType));
   const uniformType = types.size === 1 ? [...types][0] : null;
   const step = (uniformType && BRIQ_CATALOG[uniformType]) ? BRIQ_CATALOG[uniformType].crossCells : 1;
   const MAX_LIFTS = Math.ceil((HEIGHT_MAX + 4) / CELL_M / Math.max(step, 1)); // generous cap derived from the world's own height limit, not a guessed constant
+  // Gathered ONCE for the whole clipboard, across every lift level this
+  // loop might try — this (scanning the handful-to-thousands of REAL
+  // bricks nearby) replaces what used to be a full per-cell scan of
+  // EVERY clipboard entry's OWN cells, at EVERY candidate lift level —
+  // the actual dominant cost behind "extremes Ruckeln beim Aufspannen
+  // einer großen Fläche", the exact same root cause the roof fix
+  // addressed for a single huge panel, here applied to a clipboard that
+  // can just as easily be several thousand SEPARATE small entries.
+  // Accepts an already-gathered candidate list from the caller
+  // (getCopyPreviewForAim shares ONE scan with computeEntryValidityFlags
+  // rather than each redoing the same bricks.values() pass) — falls
+  // back to gathering its own when called standalone.
+  const candidates = precomputedCandidates || (() => {
+    const bbox = entriesBoundingBoxXZ(entries);
+    return clipboardWorldCandidates(bbox.x0 + dx, bbox.x1 + dx, 0, CELL_Y_MAX, bbox.z0 + dz, bbox.z1 + dz);
+  })();
+  const scratch = {}; // one reused object for the whole loop — see entryFootprintAt's own comment
   let dy = 0;
   for (let i = 0; i <= MAX_LIFTS; i++) {
     let overlaps = false;
     for (const e of entries) {
-      for (const c of entryCellsAt(e, dx, dy, dz)) {
-        if (occupancy.has(key(...c))) { overlaps = true; break; }
-      }
-      if (overlaps) break;
+      entryFootprintAt(e, dx, dy, dz, scratch);
+      if (entryOverlapsCandidates(e, dx, dy, dz, scratch, candidates)) { overlaps = true; break; }
     }
     if (!overlaps) return dy;
     dy += step;
@@ -9765,67 +10132,32 @@ function computeCopyPasteRestY(entries, dx, dz) {
 // stud geometry) — anything more mixed is left at the raw aim; the
 // overlap/lift logic above still applies regardless, this refinement
 // on top of it just doesn't additionally kick in.
-// Cache for the copy-paste preview's own (fairly expensive — it scales
-// with however many pieces are in the clipboard) validity/position
-// computation, keyed on the exact things that could actually change
-// its result. Without this, updateCopyAimAndGhost recomputed all of it
-// from scratch on literally every single animation frame, even when
-// the aim hadn't moved to a new cell at all between one frame and the
-// next — harmless for a small clipboard, but a genuine, noticeable
-// stutter once someone copies a large structure (hundreds of Briqs),
-// since EVERY frame was repeating that full-sized computation for no
-// reason. Invalidated explicitly wherever the clipboard's own content
-// or anchor mode can change (capture, rotate, cycling the anchor
-// toggle) — see the few `copyPreviewCache = null;` lines at each of
-// those call sites.
+// Cache for the copy-paste preview, keyed on the exact raw aim
+// position — a genuinely resting aim (querying the same pixel-ish spot
+// repeatedly) reuses this without recomputing anything at all.
+// Invalidated explicitly wherever the clipboard's own content or
+// anchor mode can change (capture, rotate, cycling the anchor toggle)
+// — see the few `copyPreviewCache = null;` lines at each of those call
+// sites. A MOVING aim recomputes every frame regardless — but now via
+// computeCopyPasteRestY/computeEntryValidityFlags's own fast,
+// candidate-based checks (see their own comments), not a full per-cell
+// scan of the whole clipboard, so there's no longer anything expensive
+// enough here to need throttling on top of this cache the way there
+// used to be.
 let copyPreviewCache = null; // { key, anchor, restY, flags }
-// The rest-height computation (computeCopyPasteRestY) is the single
-// most expensive part of this whole preview — for a large clipboard it
-// walks every entry's own full cell list, at every candidate lift
-// level, checking each one against the world's occupancy — and unlike
-// the colour computation just below, it was left completely
-// unthrottled: it reran in full on every single cache miss above (i.e.
-// on every frame the aim genuinely moved to a new cell at all), which
-// is the actual dominant cost behind the reported stutter once a large
-// structure gets copied, more so than the per-piece validity colouring
-// itself. Throttled here the same way, and for the same reason: the
-// ghost's own HEIGHT staying accurate to within ~150ms, rather than
-// the current frame exactly, is imperceptible during normal aiming,
-// while recomputing the full scan on literally every frame is not.
-let copyPreviewRestYCache = null; // { entries, restY, computedAt }
-const COPY_PREVIEW_RESTY_THROTTLE_MS = 150;
-// The per-piece validity check (computeEntryValidityFlags) is the most
-// expensive part of this — it scales with however many pieces are in
-// the clipboard, same as the rest, but unlike the position/height
-// computation it doesn't need to be perfectly up-to-the-frame to still
-// look right: colours flipping a fraction of a second later than the
-// ghost's own position moving is imperceptible during normal dragging,
-// while recomputing it on literally every cache miss (i.e. on every
-// frame the aim genuinely moves at all — the exact situation actively
-// lining up a large paste involves) is not. Throttled separately from
-// the position cache above it, so the ghost itself still follows the
-// cursor with zero lag every frame regardless.
-let copyPreviewColorCache = null; // { entries, flags, computedAt }
-const COPY_PREVIEW_COLOR_THROTTLE_MS = 150;
 function getCopyPreviewForAim(entries, rawX, rawZ) {
   const key = `${rawX}_${rawZ}`;
   if (copyPreviewCache && copyPreviewCache.key === key) return copyPreviewCache;
   const anchor = resolveCopyPasteAnchor(entries, rawX, rawZ);
-  const now = Date.now();
-  let restY;
-  if (copyPreviewRestYCache && copyPreviewRestYCache.entries === entries && (now - copyPreviewRestYCache.computedAt) < COPY_PREVIEW_RESTY_THROTTLE_MS) {
-    restY = copyPreviewRestYCache.restY;
-  } else {
-    restY = computeCopyPasteRestY(entries, anchor.x, anchor.z);
-    copyPreviewRestYCache = { entries, restY, computedAt: now };
-  }
-  let flags;
-  if (copyPreviewColorCache && copyPreviewColorCache.entries === entries && (now - copyPreviewColorCache.computedAt) < COPY_PREVIEW_COLOR_THROTTLE_MS) {
-    flags = copyPreviewColorCache.flags;
-  } else {
-    flags = computeEntryValidityFlags(entries, anchor.x, restY, anchor.z);
-    copyPreviewColorCache = { entries, flags, computedAt: now };
-  }
+  // Candidates gathered ONCE here and handed to both steps below —
+  // computeCopyPasteRestY and computeEntryValidityFlags would otherwise
+  // each independently scan `bricks` for the exact same clipboard at
+  // the exact same anchor, doubling that part of the work for no
+  // reason on every single recompute.
+  const bbox = entriesBoundingBoxXZ(entries);
+  const candidates = clipboardWorldCandidates(bbox.x0 + anchor.x, bbox.x1 + anchor.x, 0, CELL_Y_MAX, bbox.z0 + anchor.z, bbox.z1 + anchor.z);
+  const restY = computeCopyPasteRestY(entries, anchor.x, anchor.z, candidates);
+  const flags = computeEntryValidityFlags(entries, anchor.x, restY, anchor.z, candidates);
   copyPreviewCache = { key, anchor, restY, flags };
   return copyPreviewCache;
 }
@@ -9847,6 +10179,108 @@ function resolveCopyPasteAnchor(entries, rawX, rawZ) {
   const types = new Set(entries.map((e) => e.mainType));
   const crossCells = (allPlainBricks && types.size === 1) ? BRIQ_CATALOG[[...types][0]].crossCells : BRIQ_CATALOG.WS25.crossCells;
   return { x: Math.round(rawX / crossCells) * crossCells, z: Math.round(rawZ / crossCells) * crossCells };
+}
+// Fast, allocation-light BOX footprint for one clipboard entry shifted
+// by (dx,dy,dz) — no per-cell array, mirroring the exact same INCLUSIVE
+// {x0,x1,y0,y1,z0,z1} convention every real placed brick's own
+// `.footprint` already uses, so it can be compared directly against
+// real world bricks with a single box-overlap test on either side. For
+// an ordinary Briq or a Platte this box IS the entry's real shape
+// (both genuinely fill their whole bounding box); for a Dach it's an
+// OVER-approximation (a sloped panel never fills its own box) — see
+// entryOverlapsCandidates' own comment for how that gets handled.
+// Writes into `out` (a plain reusable object) rather than allocating a
+// fresh one, when the caller supplies one — a tight loop over a large
+// clipboard used to allocate one brand-new footprint object PER ENTRY,
+// PER CALL, several times over per single preview recompute (once for
+// the bounding box, once per lift-level attempt, once more for the
+// validity pass) — for a several-thousand-piece clipboard that's tens
+// of thousands of short-lived objects created every single time the
+// aim moves at all, and the resulting GC pressure was the actual
+// remaining cost after the fast candidate-based checks themselves (see
+// clipboardWorldCandidates' own comment) — each individual check was
+// already fast in isolation, but the ALLOCATION churn across a whole
+// preview recompute, repeated every frame while dragging, is what
+// still added up. Omitting `out` still allocates fresh, exactly as
+// before, for any caller that genuinely needs the result to outlive
+// the current loop iteration.
+function entryFootprintAt(e, dx, dy, dz, out) {
+  const o = out || {};
+  if (e.isRoofBlock) {
+    const crossCells = BRIQ_CATALOG.DACH.crossCells;
+    const yMin = Math.min(e.yLow, e.yHigh), yMax = Math.max(e.yLow, e.yHigh);
+    o.x0 = e.x0 + dx; o.x1 = e.x1 - 1 + dx; o.y0 = yMin + dy; o.y1 = yMax + crossCells - 1 + dy; o.z0 = e.z0 + dz; o.z1 = e.z1 - 1 + dz;
+    return o;
+  }
+  if (e.isSlabBlock) {
+    const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
+    o.x0 = e.x0 + dx; o.x1 = e.x1 - 1 + dx; o.y0 = e.y + dy; o.y1 = e.y + crossCells - 1 + dy; o.z0 = e.z0 + dz; o.z1 = e.z1 - 1 + dz;
+    return o;
+  }
+  // Inlined rather than delegating to footprintOf — that helper always
+  // allocates its own fresh object, which is exactly the cost being
+  // avoided here.
+  const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
+  const ax = e.x + dx, ay = e.y + dy, az = e.z + dz;
+  if (e.orientation === 'x') {
+    o.x0 = ax; o.x1 = ax + e.lengthCells - 1; o.y0 = ay; o.y1 = ay + crossCells - 1; o.z0 = az; o.z1 = az + crossCells - 1;
+  } else {
+    o.x0 = ax; o.x1 = ax + crossCells - 1; o.y0 = ay; o.y1 = ay + crossCells - 1; o.z0 = az; o.z1 = az + e.lengthCells - 1;
+  }
+  return o;
+}
+function footprintsOverlap(a, b) {
+  return a.x0 <= b.x1 && a.x1 >= b.x0 && a.y0 <= b.y1 && a.y1 >= b.y0 && a.z0 <= b.z1 && a.z1 >= b.z0;
+}
+// The world bricks a whole shifted clipboard could possibly touch —
+// gathered ONCE per preview recompute from `bricks` itself (typically
+// hundreds to a few thousand entries even for a big build), rather than
+// per individual clipboard entry, and definitely rather than per CELL
+// (which, for a several-thousand-piece clipboard, was exactly the
+// "extreme Ruckeln beim Aufspannen" this replaces — the same underlying
+// idea as roofOverlapCandidates, applied to a whole clipboard's own
+// bounding box instead of one roof's).
+function clipboardWorldCandidates(x0, x1, y0, y1, z0, z1) {
+  const out = [];
+  for (const b of bricks.values()) {
+    const fp = b.footprint;
+    if (fp.x1 < x0 || fp.x0 > x1 || fp.y1 < y0 || fp.y0 > y1 || fp.z1 < z0 || fp.z0 > z1) continue;
+    out.push(b);
+  }
+  return out;
+}
+// Does ONE entry's own footprint collide with anything real, using the
+// pre-gathered candidate list above? Box vs box for the overwhelmingly
+// common case — an ordinary Briq/Platte entry against an ordinary
+// Briq/Platte candidate, where both shapes genuinely fill their own
+// bounding box, so a box hit IS a real collision, no further check
+// needed. A ROOF is the one exception on either side (its sloped cells
+// never fill its own box): a roof CANDIDATE only gets a small, exact
+// per-cell check bounded to the actual overlap region (never the whole
+// entry or the whole candidate); a roof ENTRY is routed to the already
+// -fast roofWouldCollide instead of trying to force a sloped shape
+// through a plain box test.
+function entryOverlapsCandidates(e, dx, dy, dz, fp, candidates) {
+  if (e.isRoofBlock) {
+    const slopeAxis = e.slopeAxis;
+    return roofWouldCollide(e.x0 + dx, e.x1 + dx, e.z0 + dz, e.z1 + dz, e.yLow + dy, e.yHigh + dy, slopeAxis);
+  }
+  for (const b of candidates) {
+    const cfp = b.footprint;
+    if (!footprintsOverlap(fp, cfp)) continue;
+    if (!b.isRoofBlock) return true;
+    const ox0 = Math.max(fp.x0, cfp.x0), ox1 = Math.min(fp.x1, cfp.x1);
+    const oy0 = Math.max(fp.y0, cfp.y0), oy1 = Math.min(fp.y1, cfp.y1);
+    const oz0 = Math.max(fp.z0, cfp.z0), oz1 = Math.min(fp.z1, cfp.z1);
+    for (let x = ox0; x <= ox1; x++) {
+      for (let y = oy0; y <= oy1; y++) {
+        for (let z = oz0; z <= oz1; z++) {
+          if (occupancy.has(key(x, y, z))) return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 function entryCellsAt(e, dx, dy, dz) {
   if (e.isRoofBlock) {
@@ -9883,7 +10317,7 @@ function entryCellsAt(e, dx, dy, dz) {
 function entryValidAt(e, dx, dy, dz, virtualCells) {
   const cells = entryCellsAt(e, dx, dy, dz);
   if (!cellsFree(cells)) return false;
-  if (e.isRoofBlock || e.isSlabBlock) return true;
+  if (e.isRoofBlock || e.isSlabBlock || freeMode) return true;
   const crossCells = BRIQ_CATALOG[e.mainType].crossCells;
   const fp = footprintOf([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, crossCells, e.orientation);
   if (fp.y0 <= 0) return true; // ground-level is always fine, same rule structuralCheck itself uses
@@ -9916,7 +10350,7 @@ function buildEntryGhostMesh(e) {
   // shadow pass every single frame for a preview nobody's shadow needs
   // to be correct for in the first place.
   if (e.isRoofBlock) {
-    const t = computeRoofTransform(e.x0, e.x1, e.z0, e.z1, e.yLow, e.yHigh, e.slopeAxis);
+    const t = applyRoofOverhang(computeRoofTransform(e.x0, e.x1, e.z0, e.z1, e.yLow, e.yHigh, e.slopeAxis), e.slopeAxis);
     const mesh = new THREE.Mesh(getRoofBodyGeo(t.geoDimX, t.thickness, t.geoDimZ), copyPreviewMat);
     mesh.position.set(t.position.x, t.position.y, t.position.z);
     mesh.rotation.x = t.rotation.x; mesh.rotation.z = t.rotation.z;
@@ -10014,15 +10448,13 @@ function captureClipboard(x0, x1, z0, z1) {
   for (const e of entries) shiftCaptureEntry(e, -x0, 0, -z0);
   clipboard = { entries, w: x1 - x0, d: z1 - z0, minY, maxY };
   rebaseClipboardToTightBounds(); // corrects w/d/entries down to the ACTUAL captured footprint, not the (usually larger) marked rectangle
-  copyPreviewCache = null; copyPreviewColorCache = null; copyPreviewRestYCache = null; // a brand new clipboard — any cached preview from a previous one is meaningless now, even if the aim happens to land on the exact same cell as before
+  copyPreviewCache = null; // a brand new clipboard — any cached preview from a previous one is meaningless now, even if the aim happens to land on the exact same cell as before
   buildClipboardPreview();
 }
 function clearClipboard() {
   clipboard = null;
   copyStart = null;
   copyPreviewCache = null;
-  copyPreviewColorCache = null;
-  copyPreviewRestYCache = null;
   clearClipboardPreview();
   updateBriqControlsVisibility();
 }
@@ -10168,7 +10600,7 @@ function rotateClipboard90() {
     else rotateBrickEntry90(e);
   }
   rebaseClipboardToTightBounds();
-  copyPreviewCache = null; copyPreviewColorCache = null; copyPreviewRestYCache = null; // the entries themselves just changed shape — a cached preview keyed only on aim position (or, for colours/height, only on the entries array reference — rotation mutates entries IN PLACE rather than replacing the array) would otherwise still match and wrongly get reused
+  copyPreviewCache = null; // the entries themselves just changed shape — a cached preview keyed only on aim position would otherwise still match and wrongly get reused (rotation mutates entries IN PLACE rather than replacing the array)
   buildClipboardPreview();
 }
 // Reads the CURRENT aim (refreshed every frame by updateCopyAimAndGhost,
@@ -10204,14 +10636,66 @@ function doCopyAction() {
 // theoretical support, even when THAT piece itself was doomed to be
 // skipped — so it would silently fail at the real paste despite having
 // been shown as fine a moment earlier.
-function computeEntryValidityFlags(entries, dx, dy, dz) {
-  const virtualCells = new Set();
+function computeEntryValidityFlags(entries, dx, dy, dz, precomputedCandidates) {
+  // Gathered ONCE for the whole clipboard — see computeCopyPasteRestY's
+  // own comment on why this (scanning what's actually nearby) replaces
+  // a full per-cell scan of every entry, at every entry, all over
+  // again. Also accepts an already-gathered list from the caller, same
+  // as computeCopyPasteRestY, so getCopyPreviewForAim's own combined
+  // call scans `bricks` only once in total, not once per sub-step.
+  const candidates = precomputedCandidates || (() => {
+    const bbox = entriesBoundingBoxXZ(entries);
+    return clipboardWorldCandidates(bbox.x0 + dx, bbox.x1 + dx, 0, CELL_Y_MAX, bbox.z0 + dz, bbox.z1 + dz);
+  })();
+  // Only entries whose bottom actually sits on some OTHER entry's top
+  // ever consult the virtual-support set at all — pre-computing exactly
+  // which shifted layers will genuinely be probed means the common
+  // case (a flat, single-course capture, or one already fully resting
+  // on real ground) records nothing into it whatsoever. Mirrors the
+  // exact same principle the roof's own fast path and this file's
+  // packedCellKey both already lean on.
+  const wantedSupportLayers = new Set();
+  if (!freeMode) {
+    for (const e of entries) {
+      if (e.isRoofBlock || e.isSlabBlock) continue;
+      const seekerY0 = e.y + dy;
+      if (seekerY0 > 0) wantedSupportLayers.add(seekerY0 - 1);
+    }
+  }
+  const virtualTop = new Set(); // packed (x,y,z) keys — ONLY each valid entry's own TOP layer, and ONLY when some other entry might actually need it
   const flags = [];
+  const scratch = {}; // one reused object for the whole loop — see entryFootprintAt's own comment
   for (const e of entries) {
-    const valid = entryValidAt(e, dx, dy, dz, virtualCells);
+    const fp = entryFootprintAt(e, dx, dy, dz, scratch);
+    let valid = !entryOverlapsCandidates(e, dx, dy, dz, fp, candidates);
+    if (valid && !freeMode && !e.isRoofBlock && !e.isSlabBlock && fp.y0 > 0) {
+      // Support check, bounded to this ONE entry's own (typically small)
+      // footprint area at exactly ONE layer — real occupancy first,
+      // then the same clipboard's own already-validated pieces. Skipped
+      // entirely in Free Mode — see structuralCheck's own comment on
+      // why nothing about support is checked at all once that's on.
+      const supportY = fp.y0 - 1;
+      let supported = false;
+      outer: for (let x = fp.x0; x <= fp.x1; x++) {
+        for (let z = fp.z0; z <= fp.z1; z++) {
+          if (occupancy.has(key(x, supportY, z)) || virtualTop.has(packedCellKey(x, supportY, z))) { supported = true; break outer; }
+        }
+      }
+      valid = supported;
+    }
     flags.push(valid);
-    if (valid) {
-      for (const c of entryCellsAt(e, dx, dy, dz)) virtualCells.add(c.join('_'));
+    if (valid && !e.isRoofBlock && wantedSupportLayers.has(fp.y1)) {
+      // Only the TOP layer, not the whole entry — sufficient, not just
+      // cheaper: within one clipboard (whose own pieces can never
+      // overlap each other — they were captured from real, already
+      // non-overlapping placed Briqs, and all shift together), a
+      // supporter owning a cell at the exact layer some seeker probes,
+      // without also colliding with it, forces its own top to be
+      // EXACTLY that layer. Its middle cells can never be anyone's
+      // support, so recording them was always pure waste.
+      for (let x = fp.x0; x <= fp.x1; x++) {
+        for (let z = fp.z0; z <= fp.z1; z++) virtualTop.add(packedCellKey(x, fp.y1, z));
+      }
     }
   }
   return flags;
@@ -10514,11 +10998,15 @@ function updateRoofAimAndGhost() {
   const crossCells = BRIQ_CATALOG.DACH.crossCells;
   if (!roofStart) {
     // No low edge marked yet — show a small flat single-module preview,
-    // same idea as the Platte's own pre-first-corner ghost.
+    // same idea as the Platte's own pre-first-corner ghost — and, like
+    // the Platte's, it's still checked for validity: a first corner
+    // aimed at an already-occupied spot should turn red immediately
+    // too, not just wait until the second click reveals it.
     if (!roofGhostMesh) roofGhostMesh = new THREE.Mesh(roofGhostGeo, ghostMatValid);
     roofGhostMesh.scale.set(crossCells * CELL_M, crossCells * CELL_M, crossCells * CELL_M);
     roofGhostMesh.position.set((corner.x + crossCells / 2) * CELL_M, (corner.y + crossCells / 2) * CELL_M, (corner.z + crossCells / 2) * CELL_M);
     roofGhostMesh.rotation.set(0, 0, 0);
+    roofGhostMesh.material = roofWouldCollide(corner.x, corner.x + crossCells, corner.z, corner.z + crossCells, corner.y, corner.y, 'x') ? ghostMatInvalid : ghostMatValid;
     scene.add(roofGhostMesh);
     return;
   }
@@ -10531,12 +11019,29 @@ function updateRoofAimAndGhost() {
   } else {
     if (roofStart.z <= corner.z) { yLow = roofStart.y; yHigh = corner.y; } else { yLow = corner.y; yHigh = roofStart.y; }
   }
-  if (yHigh === yLow) yHigh = yLow + crossCells * 3;
-  const t = computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis);
+  // A genuine tie (both clicked corners at the same height) now builds
+  // a truly FLAT panel — no forced default pitch any more. It also no
+  // longer matters which corner was clicked first: the two same-height
+  // corners always used to produce identical yLow/yHigh either way (the
+  // pairing is position-based, not click-order-based — see the
+  // assignment just above), so the old forced pitch's direction was
+  // never actually influenced by click order despite feeling like it
+  // should be; removing it here removes that confusion along with it.
+  const t = applyRoofOverhang(computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis), slopeAxis);
   if (!roofGhostMesh) roofGhostMesh = new THREE.Mesh(roofGhostGeo, ghostMatValid);
   roofGhostMesh.scale.set(t.geoDimX, t.thickness, t.geoDimZ);
   roofGhostMesh.position.set(t.position.x, t.position.y, t.position.z);
   roofGhostMesh.rotation.set(t.rotation.x, 0, t.rotation.z);
+  // The exact same rule placeRoofBlock itself applies (including the
+  // "rest on top of a supporting wall, up to the roof's own max
+  // height, but never above it" allowance) — mirrored here via the
+  // FAST candidate-based check (no per-cell arrays, see
+  // roofWouldCollide's own comment) so the ghost stays smooth even
+  // over a huge span, while still actually predicting whether the
+  // second click will succeed — the same way the Platte's own ghost
+  // already does, rather than always showing valid and only failing
+  // silently on the real click.
+  roofGhostMesh.material = roofWouldCollide(x0, x1, z0, z1, yLow, yHigh, slopeAxis) ? ghostMatInvalid : ghostMatValid;
   scene.add(roofGhostMesh);
 }
 
@@ -10565,7 +11070,14 @@ function resolveRoofSlopeAxis(x0, x1, z0, z1) {
 function doRoofFillWithUndo(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material) {
   const id = placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, false);
   if (id !== null) {
-    const cell = [x0, Math.min(yLow, yHigh), z0];
+    // Read the ACTUAL placed brick's own first cell for undo, rather
+    // than pre-guessing [x0, Math.min(yLow,yHigh), z0] — a roof resting
+    // on top of a supporting wall gets its real bottom height raised
+    // above that naive guess (see roofSupportedHeight), so the guessed
+    // cell can land on a spot that's already empty again by the time
+    // undo runs, silently finding nothing to remove. The brick's own
+    // stored cells are exactly what was really placed, always correct.
+    const cell = bricks.get(id).cells[0];
     pushUndo(
       () => removeBrickAt(cell),
       () => { placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, true); playPlaceSound(Math.min(yLow, yHigh) === 0); }
@@ -10593,15 +11105,28 @@ function doRoofAction() {
   // yLow/yHigh here mean "the height AT the low-position edge" and "AT
   // the high-position edge" respectively — NOT "whichever is numerically
   // smaller". A roof can validly DECLINE (the low-position wall taller
-  // than the high-position one), so only a true TIE is ambiguous enough
-  // to need the default-pitch fallback below.
+  // than the high-position one). A genuine TIE (both corners the same
+  // height) now builds a truly FLAT panel — no forced default pitch any
+  // more, and click order never affected which direction that old pitch
+  // leaned anyway (the pairing above is position-based, not click-order
+  // based), so removing it removes that confusing-feeling coincidence
+  // along with the forced slope itself.
   let yLow, yHigh;
   if (slopeAxis === 'x') {
     if (roofStart.x <= c2.x) { yLow = roofStart.y; yHigh = c2.y; } else { yLow = c2.y; yHigh = roofStart.y; }
   } else {
     if (roofStart.z <= c2.z) { yLow = roofStart.y; yHigh = c2.y; } else { yLow = c2.y; yHigh = roofStart.y; }
   }
-  if (yHigh === yLow) yHigh = yLow + crossCells * 3; // only a TRUE tie needs a default pitch — a genuinely declining roof (the low-position edge taller than the high-position one) must be respected, not "corrected" away
+  // Opt-in diagnostic (same pattern/flag as raycastAim's own, see its
+  // comment) for tracking down any future report of a roof coming out
+  // "backwards" — turn on with `window.__briqDebugRaycast = true` in the
+  // browser console before placing the roof, then send the two logged
+  // lines. Every value that goes into the actual placement is right
+  // here, so a real report gives exact numbers instead of a guess.
+  if (window.__briqDebugRaycast) {
+    console.log('[BriqSite] doRoofAction: clicked corners', { roofStart: { ...roofStart }, second: { ...c2 } });
+    console.log('[BriqSite] doRoofAction: resolved footprint/slope', { x0, x1, z0, z1, slopeAxis, yLow, yHigh });
+  }
   doRoofFillWithUndo(x0, x1, z0, z1, yLow, yHigh, slopeAxis, roofMaterial);
   roofStart = null;
 }
@@ -12313,6 +12838,16 @@ function withGhostsHidden(fn) {
     if (clipboardPreviewGroup) clipboardPreviewGroup.visible = prevPreviewVisible;
   }
 }
+// Capped rather than using the renderer's own native resolution
+// (CSS size \u00d7 device pixel ratio, which on a modern phone can be huge \u2014
+// 3x DPR isn't unusual): this is specifically for sharing to WhatsApp/
+// Instagram/etc. on a phone screen, where nobody will ever view it
+// larger than that anyway. Capping the longer edge keeps the copy-to-
+// 2D-canvas step (which has to wait for the GPU to finish and hand
+// pixels back to the CPU \u2014 a real stall, not free) and the JPEG
+// encode itself both working on far fewer pixels, which is where
+// almost all of the delay actually came from.
+const SHARE_SCREENSHOT_MAX_DIMENSION = 1600;
 function captureScreenshotBlob() {
   return new Promise((resolve) => {
     withGhostsHidden(() => {
@@ -12322,13 +12857,20 @@ function captureScreenshotBlob() {
       // on top of the final image, without touching the live 3D scene
       // (or its own canvas) at all.
       const srcCanvas = renderer.domElement;
+      const scale = Math.min(1, SHARE_SCREENSHOT_MAX_DIMENSION / Math.max(srcCanvas.width, srcCanvas.height));
       const outCanvas = document.createElement('canvas');
-      outCanvas.width = srcCanvas.width;
-      outCanvas.height = srcCanvas.height;
+      outCanvas.width = Math.round(srcCanvas.width * scale);
+      outCanvas.height = Math.round(srcCanvas.height * scale);
       const ctx = outCanvas.getContext('2d');
-      ctx.drawImage(srcCanvas, 0, 0);
+      ctx.drawImage(srcCanvas, 0, 0, outCanvas.width, outCanvas.height); // the downscale happens as PART of this copy, not as a separate pass
       drawScreenshotWatermark(ctx, outCanvas.width, outCanvas.height);
-      outCanvas.toBlob((blob) => resolve(blob), 'image/png');
+      // JPEG, not PNG: a screenshot never needs transparency, and PNG's
+      // lossless compression was the single biggest cost in the whole
+      // capture — JPEG encodes dramatically faster for a photo-like 3D
+      // render, and 0.88 quality is visually indistinguishable at
+      // sharing size while still keeping the file small for WhatsApp
+      // etc. to handle quickly.
+      outCanvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.88);
     });
   });
 }
@@ -12398,33 +12940,48 @@ function drawScreenshotTeamBadge(ctx, w, h) {
   ctx.fillStyle = '#f3e8d2';
   ctx.fillText(label, pillX + paddingX, pillY + pillH / 2 + fontSize * 0.04);
 }
+// Guards against exactly the problem a slow capture used to invite:
+// tapping the camera button again (or several times) while the first
+// tap is still being processed, because nothing on screen indicated
+// anything was happening yet. Combined with the loading overlay below,
+// a second tap now simply does nothing instead of queueing up a second
+// full capture (or, worse, a second share sheet fighting the first).
+let screenshotInProgress = false;
 async function shareScreenshot() {
-  const blob = await captureScreenshotBlob();
-  if (!blob) { alert('Could not create a screenshot.'); return; }
-  const file = new File([blob], 'briqsite-screenshot.png', { type: 'image/png' });
-  const shareText = `Check out what I built in BriqSite! ${GAME_URL}`;
-  // navigator.share with a file is what opens the native share sheet
-  // (WhatsApp, Messages, Mail, ...) on phones, with `text` becoming the
-  // caption alongside the image. Where that's unavailable (most desktop
-  // browsers), fall back to a plain download — and since a downloaded
-  // image file can't carry a caption of its own, also copy the link to
-  // the clipboard so it's one paste away from being attached by hand.
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: 'BriqSite', text: shareText });
-      unlockAchievement('shared');
-      return;
-    } catch (e) {
-      if (e && e.name === 'AbortError') return; // the player cancelled the share sheet themselves
-      // any other error: fall through to the download fallback below
+  if (screenshotInProgress) return;
+  screenshotInProgress = true;
+  showLoadingOverlay('Preparing screenshot\u2026');
+  try {
+    const blob = await captureScreenshotBlob();
+    if (!blob) { alert('Could not create a screenshot.'); return; }
+    const file = new File([blob], 'briqsite-screenshot.jpg', { type: 'image/jpeg' });
+    const shareText = `Check out what I built in BriqSite! ${GAME_URL}`;
+    // navigator.share with a file is what opens the native share sheet
+    // (WhatsApp, Messages, Mail, ...) on phones, with `text` becoming the
+    // caption alongside the image. Where that's unavailable (most desktop
+    // browsers), fall back to a plain download — and since a downloaded
+    // image file can't carry a caption of its own, also copy the link to
+    // the clipboard so it's one paste away from being attached by hand.
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: 'BriqSite', text: shareText });
+        unlockAchievement('shared');
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return; // the player cancelled the share sheet themselves
+        // any other error: fall through to the download fallback below
+      }
     }
-  }
-  downloadBlob(blob, 'briqsite-screenshot.png');
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    try {
-      await navigator.clipboard.writeText(GAME_URL);
-      alert('Screenshot downloaded! The game link was also copied to your clipboard \u2014 paste it into your message.');
-    } catch (e) { /* clipboard permission denied or unavailable — the download itself still succeeded */ }
+    downloadBlob(blob, 'briqsite-screenshot.jpg');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(GAME_URL);
+        alert('Screenshot downloaded! The game link was also copied to your clipboard \u2014 paste it into your message.');
+      } catch (e) { /* clipboard permission denied or unavailable — the download itself still succeeded */ }
+    }
+  } finally {
+    hideLoadingOverlay();
+    screenshotInProgress = false;
   }
 }
 document.getElementById('shareBtn').addEventListener('click', shareScreenshot);

@@ -1,3 +1,4 @@
 {
-  "strand": ["music/beach-1.mp3", "music/beach-2.mp3", "music/beach-3.mp3"]
+  "strand": ["music/beach-1.mp3", "music/beach-2.mp3", "music/beach-3.mp3"],
+  "wald": ["music/forest-1.mp3"]
 }

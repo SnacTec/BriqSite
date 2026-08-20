@@ -410,7 +410,7 @@ try {
      is exactly what kept happening here. An explicit height on BOTH
      groups forces them to genuinely match regardless of what either
      one's own content would naturally want. */
-  #briqGroupSize .btn, #removeGridGroup .btn, #roofMaterialGroup .btn, #copyGroup .btn, #paintGroup .btn{height:40px; overflow:hidden;}
+  #briqGroupSize .btn, #removeGridGroup .btn, #copyGroup .btn, #paintGroup .btn{height:40px; overflow:hidden;}
   .btn:active{transform:scale(.93);}
   .btn[disabled]{opacity:.45; cursor:not-allowed; filter:grayscale(.4);}
   .btn[disabled]:active{transform:none;}
@@ -1030,7 +1030,7 @@ try {
   body.desktop-ui #toolGroup .btn{font-size:19px; min-width:44px; height:54px;}
   body.desktop-ui #toolGroup .btn.active{font-size:16px; min-width:54px;}
   body.desktop-ui #briqGroupSize .btn, body.desktop-ui #removeGridGroup .btn,
-  body.desktop-ui #roofMaterialGroup .btn, body.desktop-ui #copyGroup .btn, body.desktop-ui #paintGroup .btn{
+  body.desktop-ui #copyGroup .btn, body.desktop-ui #paintGroup .btn{
     height:54px;
   }
   body.desktop-ui #buildPanelToggleBtn{font-size:16px;}
@@ -1085,7 +1085,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v5.30</div>
+  <div id="versionLabel">v5.32</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1196,7 +1196,7 @@ try {
     <div class="group-label" style="margin-top:10px;">Location</div>
     <div class="group" id="envMenuGroup" style="flex-wrap:wrap;">
       <button class="btn" data-env="strand">🏖<small>Beach</small></button>
-      <button class="btn" data-env="dschungel">🌴<small>Jungle</small></button>
+      <button class="btn" data-env="wald">🌲<small>Forest</small></button>
       <button class="btn" data-env="berge">⛰<small>Mountains</small></button>
       <button class="btn" data-env="innenstadt">🏙<small>City</small></button>
     </div>
@@ -1246,14 +1246,6 @@ try {
             <button class="btn" data-grid="10">▦<small>Small</small></button>
             <button class="btn" data-grid="30">▩<small>Large</small></button>
             <button class="btn" data-grid="box">⬛<small>Box</small></button>
-          </div>
-        </div>
-        <div id="roofMaterialGroup" style="display:none;">
-          <div class="group" id="roofMaterialButtons">
-            <button class="btn" data-roofmat="holz">🪵<small>Wood</small></button>
-            <button class="btn active" data-roofmat="ziegel">🧱<small>Tile</small></button>
-            <button class="btn" data-roofmat="stroh">🌾<small>Thatch</small></button>
-            <button class="btn" data-roofmat="schindel">◼<small>Shingle</small></button>
           </div>
         </div>
         <div id="copyGroup" style="display:none;">
@@ -2435,8 +2427,8 @@ const ENVIRONMENTS = {
     ],
     buildBackdrop: buildOceanBackdrop,
   },
-  dschungel: {
-    label: 'Jungle',
+  wald: {
+    label: 'Forest',
     sky: [0x8fc7d6, 0xcfe7c9],
     ground: () => makeSpeckledTexture('#3f6b3a', { count: 9500, size: 2, alpha: 0.4, rgb: () => [40 + Math.random() * 40, 90 + Math.random() * 45, 35 + Math.random() * 30] }, { count: 50, minR: 8, maxR: 26, rgba: 'rgba(30,60,25,0.3)' }),
     propCount: 40,
@@ -5559,13 +5551,6 @@ function isSlabType(mt) { return !!(BRIQ_CATALOG[mt] && BRIQ_CATALOG[mt].isSlab)
 // Roof surface finishes — purely cosmetic (colour/roughness), selectable
 // independently of the Platte colour picker. 'holz' reuses the ordinary
 // wood look; the others are dedicated roofing finishes.
-const ROOF_MATERIALS = {
-  holz: { label: 'Wood', color: 0x8a5a34, roughness: 0.85, metalness: 0 },
-  ziegel: { label: 'Tile', color: 0xa8442e, roughness: 0.75, metalness: 0 },
-  stroh: { label: 'Thatch', color: 0xd4b45a, roughness: 0.95, metalness: 0 },
-  schindel: { label: 'Shingle', color: 0x6b6b6b, roughness: 0.8, metalness: 0.05 },
-};
-let roofMaterial = 'ziegel'; // pending finish for the NEXT roof panel, set via its own picker
 // null = auto-guess the slope axis from the footprint's own extent
 // (the larger side); 'x' or 'z' pins it explicitly, via the Rotate
 // button — the guess can't always be trusted (a long, narrow room may
@@ -6050,7 +6035,6 @@ function updateBriqControlsVisibility() {
   const isPaint = tool === 'paint';
   document.getElementById('briqGroupSize').style.display = (isDecor || isSlab || isRemove || isCopy || isMeasure || isPaint) ? 'none' : '';
   document.getElementById('removeGridGroup').style.display = (!isDecor && isRemove) ? '' : 'none';
-  document.getElementById('roofMaterialGroup').style.display = (!isDecor && mainType === 'DACH' && tool === 'place') ? '' : 'none';
   document.getElementById('copyGroup').style.display = (!isDecor && isCopy) ? '' : 'none';
   // The colour picker also gets its own slot here, right next to the
   // tools that actually need it — Build AND Recolour both do, since a
@@ -6431,12 +6415,6 @@ document.getElementById('removeGridButtons').addEventListener('click', (e) => {
   removeBoxStart = null; // switching between grid-size and box mode always starts clean, same as switching tools does
   if (!removeBoxMode) removeGridCells = parseInt(btn.dataset.grid, 10);
   document.querySelectorAll('#removeGridButtons .btn').forEach((b) => b.classList.toggle('active', b === btn));
-});
-document.getElementById('roofMaterialButtons').addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-roofmat]');
-  if (!btn) return;
-  roofMaterial = btn.dataset.roofmat;
-  document.querySelectorAll('#roofMaterialButtons .btn').forEach((b) => b.classList.toggle('active', b === btn));
 });
 function updateActionBtnLabel() {
   const ab = document.getElementById('actionBtn');
@@ -7949,8 +7927,14 @@ function doPaintAction() {
   // getSlabBodyMat) rather than the plain per-module material an
   // ordinary Briq uses — recolouring has to go through the same helper,
   // or the retiled repeat would be lost and the texture would stretch.
+  // A roof panel is neither of those: it's a plain flat colour on a
+  // SLOPED box (see getRoofBodyMat), never a tiled wood-grain texture —
+  // routing it through getSlabBodyMat instead would silently swap in
+  // the wrong kind of material entirely.
   const depthCells = b.footprint.z1 - b.footprint.z0 + 1;
-  const getMat = (colorVal) => (b.isSlabBlock
+  const getMat = (colorVal) => (b.isRoofBlock
+    ? getRoofBodyMat(colorVal)
+    : b.isSlabBlock
     ? getSlabBodyMat(b.mainType, b.lengthCells, depthCells, colorVal)
     : getWoodMatTinted(b.mainType, b.lengthCells, colorVal));
   const newMat = getMat(newColor);
@@ -8526,13 +8510,21 @@ function placeSlabBlock(x0, x1, y, z0, z1, mt, colorVal, force) {
 // Cached roof materials/geometries, keyed by the exact slanted
 // dimensions — a roof panel's box is built along its OWN slanted length,
 // then rotated into place, unlike a Platte's simple axis-aligned box.
+// The fixed Wood/Tile/Thatch/Shingle picker is gone — a roof panel is
+// now a plain flat-coloured surface, freely repaintable exactly like a
+// Floor slab, rather than locked to one of four preset finishes. `null`
+// (no colour chosen) falls back to the same natural, warm wood-ish tone
+// every OTHER type defaults to before it's ever painted, so an unpainted
+// roof still looks like a deliberate, neutral material rather than
+// standing out as "unfinished".
+const ROOF_DEFAULT_COLOR = 0xc98a4b;
 const roofMatCache = {};
-function getRoofBodyMat(material) {
-  const def = ROOF_MATERIALS[material] || ROOF_MATERIALS.holz;
-  if (!roofMatCache[material]) {
-    roofMatCache[material] = sharedDecorMat({ color: def.color, roughness: def.roughness, metalness: def.metalness });
+function getRoofBodyMat(colorHex) {
+  const key = colorHex || 'default';
+  if (!roofMatCache[key]) {
+    roofMatCache[key] = sharedDecorMat({ color: colorHex || ROOF_DEFAULT_COLOR, roughness: 0.8, metalness: 0 });
   }
-  return roofMatCache[material];
+  return roofMatCache[key];
 }
 const roofBodyGeoCache = {};
 function getRoofBodyGeo(slantLen, thickness, width) {
@@ -8750,7 +8742,7 @@ function roofCellsFor(x0, x1, z0, z1, yLow, yHigh, slopeAxis, crossCells) {
   }
   return cells;
 }
-function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force) {
+function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, color, force) {
   const crossCells = BRIQ_CATALOG.DACH.crossCells;
   const yMin = Math.min(yLow, yHigh), yMax = Math.max(yLow, yHigh);
   // Occupancy is checked PER COLUMN at the panel's own interpolated
@@ -8778,7 +8770,7 @@ function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force)
 
   const t = applyRoofOverhang(computeRoofTransform(x0, x1, z0, z1, yLow, yHigh, slopeAxis), slopeAxis);
   const bodyGeo = getRoofBodyGeo(t.geoDimX, t.thickness, t.geoDimZ);
-  const bodyMat = getRoofBodyMat(material);
+  const bodyMat = getRoofBodyMat(color);
   const body = new THREE.Mesh(bodyGeo, bodyMat);
   body.castShadow = true; body.receiveShadow = true;
   body.position.set(t.position.x, t.position.y, t.position.z);
@@ -8791,8 +8783,8 @@ function placeRoofBlock(x0, x1, z0, z1, yLow, yHigh, slopeAxis, material, force)
   const fp = { x0, x1: x1 - 1, y0: yMin, y1: yMax + crossCells - 1, z0, z1: z1 - 1 };
   bricks.set(id, {
     mesh: body, cells, footprint: fp, mainType: 'DACH', lengthCells: x1 - x0,
-    studded: false, color: null, isSlabBlock: true, isRoofBlock: true,
-    roofYLow: yLow, roofYHigh: yHigh, roofSlopeAxis: slopeAxis, roofMaterial: material,
+    studded: false, color: color || null, isSlabBlock: true, isRoofBlock: true,
+    roofYLow: yLow, roofYHigh: yHigh, roofSlopeAxis: slopeAxis,
   });
   cells.forEach((c) => occupancy.set(key(...c), id));
   trackBuiltHeight(cells);
@@ -8811,7 +8803,7 @@ function captureBrickForUndo(b) {
   if (b.isRoofBlock) {
     return {
       isRoofBlock: true, x0: rf.x0, x1: rf.x1 + 1, z0: rf.z0, z1: rf.z1 + 1,
-      yLow: b.roofYLow, yHigh: b.roofYHigh, slopeAxis: b.roofSlopeAxis, material: b.roofMaterial,
+      yLow: b.roofYLow, yHigh: b.roofYHigh, slopeAxis: b.roofSlopeAxis, color: b.color,
     };
   }
   if (b.isSlabBlock) {
@@ -8821,7 +8813,7 @@ function captureBrickForUndo(b) {
   return { isSlabBlock: false, x: rf.x0, y: rf.y0, z: rf.z0, lengthCells: b.lengthCells, orientation, mainType: b.mainType, studded: b.studded, color: b.color };
 }
 function restoreBrickFromCapture(d) {
-  if (d.isRoofBlock) placeRoofBlock(d.x0, d.x1, d.z0, d.z1, d.yLow, d.yHigh, d.slopeAxis, d.material, true);
+  if (d.isRoofBlock) placeRoofBlock(d.x0, d.x1, d.z0, d.z1, d.yLow, d.yHigh, d.slopeAxis, d.color, true);
   else if (d.isSlabBlock) placeSlabBlock(d.x0, d.x1, d.y, d.z0, d.z1, d.mainType, d.color, true);
   else placeBrick([d.x, d.y, d.z], d.lengthCells, d.orientation, d.mainType, d.studded, true, d.color);
 }
@@ -10393,7 +10385,7 @@ function buildClipboardPreview() {
 // or null if it didn't fit there. Mirrors captureBrickForUndo's per-kind
 // dispatch, just placing instead of capturing.
 function pasteEntryAt(e, dx, dy, dz, force) {
-  if (e.isRoofBlock) return placeRoofBlock(e.x0 + dx, e.x1 + dx, e.z0 + dz, e.z1 + dz, e.yLow + dy, e.yHigh + dy, e.slopeAxis, e.material, !!force);
+  if (e.isRoofBlock) return placeRoofBlock(e.x0 + dx, e.x1 + dx, e.z0 + dz, e.z1 + dz, e.yLow + dy, e.yHigh + dy, e.slopeAxis, e.color, !!force);
   if (e.isSlabBlock) return placeSlabBlock(e.x0 + dx, e.x1 + dx, e.y + dy, e.z0 + dz, e.z1 + dz, e.mainType, e.color, !!force);
   const ok = placeBrick([e.x + dx, e.y + dy, e.z + dz], e.lengthCells, e.orientation, e.mainType, e.studded, !!force, e.color);
   return ok ? (nextBrickId - 1) : null;
@@ -11127,7 +11119,7 @@ function doRoofAction() {
     console.log('[BriqSite] doRoofAction: clicked corners', { roofStart: { ...roofStart }, second: { ...c2 } });
     console.log('[BriqSite] doRoofAction: resolved footprint/slope', { x0, x1, z0, z1, slopeAxis, yLow, yHigh });
   }
-  doRoofFillWithUndo(x0, x1, z0, z1, yLow, yHigh, slopeAxis, roofMaterial);
+  doRoofFillWithUndo(x0, x1, z0, z1, yLow, yHigh, slopeAxis, brickColor);
   roofStart = null;
 }
 
@@ -11809,7 +11801,7 @@ function serializeState() {
     if (b.isRoofBlock) {
       list.push({
         isRoof: true, x0: b.footprint.x0, x1: b.footprint.x1 + 1, z0: b.footprint.z0, z1: b.footprint.z1 + 1,
-        yLow: b.roofYLow, yHigh: b.roofYHigh, slopeAxis: b.roofSlopeAxis, material: b.roofMaterial,
+        yLow: b.roofYLow, yHigh: b.roofYHigh, slopeAxis: b.roofSlopeAxis, color: b.color || null,
       });
       continue;
     }
@@ -11981,7 +11973,7 @@ function applyLoadedData(data) {
   let skippedUnknown = 0;
   for (const entry of data.bricks) {
     if (entry.isRoof) {
-      placeRoofBlock(entry.x0, entry.x1, entry.z0, entry.z1, entry.yLow, entry.yHigh, entry.slopeAxis, entry.material, true);
+      placeRoofBlock(entry.x0, entry.x1, entry.z0, entry.z1, entry.yLow, entry.yHigh, entry.slopeAxis, entry.color, true);
       continue;
     }
     if (entry.isSlab) {
@@ -12055,7 +12047,7 @@ async function applyLoadedDataWithProgress(data) {
   let processed = 0;
   for (const entry of data.bricks) {
     if (entry.isRoof) {
-      placeRoofBlock(entry.x0, entry.x1, entry.z0, entry.z1, entry.yLow, entry.yHigh, entry.slopeAxis, entry.material, true);
+      placeRoofBlock(entry.x0, entry.x1, entry.z0, entry.z1, entry.yLow, entry.yHigh, entry.slopeAxis, entry.color, true);
     } else if (entry.isSlab) {
       placeSlabBlock(entry.x0, entry.x1, entry.y, entry.z0, entry.z1, entry.mainType, entry.color || null, true);
     } else if (!placeBrick([entry.x, entry.y, entry.z], entry.len, entry.orientation, entry.mainType, entry.studded, true, entry.color || null)) {

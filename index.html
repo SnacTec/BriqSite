@@ -1085,7 +1085,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v5.32</div>
+  <div id="versionLabel">v5.33</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -2626,10 +2626,22 @@ function crossfadeToTrack(url, myGeneration) {
     const outgoing = getMusicPlayer(musicActivePlayer);
     const incomingWhich = musicActivePlayer === 'A' ? 'B' : 'A';
     const incoming = getMusicPlayer(incomingWhich);
+    // Setting .currentTime immediately after a fresh .src assignment,
+    // before the browser has loaded ANY metadata for the new resource,
+    // can throw in some browsers (no valid seekable range yet) — and
+    // since that would happen synchronously here, BEFORE incoming.play()
+    // is even reached, the .catch() below (attached only to that .play()
+    // call) never gets a chance to catch it: the whole fade would die
+    // silently, leaving the OUTGOING track never paused and still
+    // playing indefinitely — exactly the reported "switching environment
+    // doesn't change the music, and switching back briefly plays it
+    // doubled" bug. Assigning a fresh .src already resets playback
+    // position to 0 as a normal part of loading a new resource, so this
+    // explicit reset was both redundant AND the actual risk — dropped
+    // rather than reordered.
     incoming.oncanplaythrough = null;
     incoming.src = url;
     incoming.volume = 0;
-    incoming.currentTime = 0;
     incoming.onended = null; // only ever the ACTIVE player's own ended handler should be armed — see below, once this one takes over
     const beginFade = () => {
       if (myGeneration !== musicGeneration) return; // a newer switch already started — this one is stale, abandon quietly rather than fighting it
@@ -2642,7 +2654,7 @@ function crossfadeToTrack(url, myGeneration) {
         outgoing.volume = outgoingStartVolume * (1 - t);
         if (t < 1) { requestAnimationFrame(step); return; }
         outgoing.pause();
-        outgoing.currentTime = 0;
+        outgoing.currentTime = 0; // safe HERE — outgoing has necessarily already been playing, so its metadata is long since loaded
         outgoing.onended = null;
         musicActivePlayer = incomingWhich;
         incoming.onended = () => advanceToNextTrack();

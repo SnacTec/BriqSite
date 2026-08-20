@@ -1085,7 +1085,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v5.12</div>
+  <div id="versionLabel">v5.13</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -4856,16 +4856,21 @@ const DECOR_CATALOG = {
   fels: { label: 'Rock', build: makeRock, randomRot: true, minSpacing: 0.4, cat: 'nature' },
   laterne: { label: 'Lamppost', build: makeLampPost, randomRot: false, minSpacing: 0.5, cat: 'light' },
   blumenbeet: { label: 'Flowers', build: makeFlowerBed, randomRot: false, minSpacing: 0.35, cat: 'garden' },
-  weg: { label: 'Path', build: makePathTile, randomRot: false, minSpacing: DECOR_GRID * 0.9, cat: 'nature' },
+  weg: { label: 'Path', build: makePathTile, randomRot: false, tileOverlapGuard: DECOR_GRID * 0.9, cat: 'nature' },
   // Deliberately 0.9x their own size (not the shared DECOR_GRID's) —
   // GROUND_TILE_SIZE is double DECOR_GRID, so this scales the exact same
   // proportional margin the Path tile above uses, letting these sit
-  // snugly adjacent to tile across an area without overlapping.
-  wiese: { label: 'Grass Patch', build: makeWieseTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
-  kies: { label: 'Gravel Patch', build: makeKiesTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
-  acker: { label: 'Dirt Patch', build: makeAckerTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
-  blumenwiese: { label: 'Flower Meadow', build: makeBlumenwieseTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
-  moos: { label: 'Moss Patch', build: makeMoosTile, randomRot: false, minSpacing: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  // snugly adjacent to tile across an area without overlapping. Unlike
+  // every other type's old minSpacing (removed — see addDecor's own
+  // comment), this one genuinely isn't about creative freedom: two
+  // same-size square ground tiles fully overlapping is pure rendering
+  // waste and z-fighting, never a deliberate choice, so this narrow
+  // guard stays — it only rejects OVERLAP, never mere closeness.
+  wiese: { label: 'Grass Patch', build: makeWieseTile, randomRot: false, tileOverlapGuard: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  kies: { label: 'Gravel Patch', build: makeKiesTile, randomRot: false, tileOverlapGuard: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  acker: { label: 'Dirt Patch', build: makeAckerTile, randomRot: false, tileOverlapGuard: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  blumenwiese: { label: 'Flower Meadow', build: makeBlumenwieseTile, randomRot: false, tileOverlapGuard: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
+  moos: { label: 'Moss Patch', build: makeMoosTile, randomRot: false, tileOverlapGuard: GROUND_TILE_SIZE * 0.9, cat: 'nature' },
   farn: { label: 'Fern', build: makeFern, randomRot: true, minSpacing: 0.25, cat: 'nature' },
   distel: { label: 'Thistle', build: makeDistel, randomRot: true, minSpacing: 0.2, cat: 'nature' },
   baumstumpf: { label: 'Tree Stump', build: makeTreeStump, randomRot: true, minSpacing: 0.35, cat: 'nature' },
@@ -5110,18 +5115,21 @@ function addDecor(type, x, z, rotY, y, force, scale) {
       const cellX = Math.round(cx / CELL_M), cellZ = Math.round(cz / CELL_M), cellY = Math.round(cy / CELL_M);
       if (occupancy.has(key(cellX, cellY, cellZ))) return false;
     }
-    // Enforce a minimum distance to any existing Deko object at the SAME
-    // height — this is what stops a single tap (which can still fire the
-    // hold-to-repeat loop for a couple of frames even on a short press)
-    // from dropping several trees right on top of each other. Scaled up
-    // for a bigger-size placement, since a Large palm needs more real
-    // clearance than a Small one. Applies to wall mounts too, so two wall
-    // lamps can't be crammed onto the exact same spot on a wall any more
-    // than two potted plants could occupy the same spot on the floor.
-    const minSpacing = (def.minSpacing || 0.35) * sc;
-    for (const d of placedDecor) {
-      if (Math.abs((d.y || 0) - cy) < CELL_M && Math.hypot(d.x - cx, d.z - cz) < minSpacing) return false;
+    // Ground-cover TILES only (Grass/Gravel/Dirt/... Patch, Path) still
+    // get a narrow overlap guard \u2014 see their own tileOverlapGuard
+    // comment in DECOR_CATALOG for why this one specific case stays
+    // while every other type's spacing restriction was removed.
+    if (def.tileOverlapGuard) {
+      for (const d of placedDecor) {
+        if (!DECOR_CATALOG[d.type] || !DECOR_CATALOG[d.type].tileOverlapGuard) continue;
+        if (Math.abs((d.y || 0) - cy) < CELL_M && Math.hypot(d.x - cx, d.z - cz) < def.tileOverlapGuard) return false;
+      }
     }
+    // Every other Deko type used to enforce a minimum distance to any
+    // existing Deko object here too \u2014 removed now that the render
+    // loop's held-repeat is properly excluded for Deko mode (see
+    // animate()'s own comment), which was the check's only real job.
+    // Players are free to cluster ordinary Deko as tightly as they like.
   }
   const mesh = def.build(cx, cz);
   if (rotY !== undefined) mesh.rotation.y = rotY;
@@ -11076,7 +11084,19 @@ function animate() {
   // shape already gets. Excluded here the same way, for the same
   // reason: one press should place exactly one, however long it's held.
   const heldPieceIsCube = tool === 'place' && !isSlabType(mainType) && brickLen === BRIQ_CATALOG[mainType].crossCells;
-  if (actionHeld && !(tool === 'place' && isSlabType(mainType)) && !heldPieceIsCube && tool !== 'copy' && !(tool === 'remove' && removeBoxMode)) doAction();
+  // Deko has the exact same "one press, one object" expectation as a
+  // cube Briq \u2014 and the exact same failure mode if it's left in this
+  // per-frame repeat: doDecorAction() would fire every single frame,
+  // machine-gunning a whole cluster of trees onto one spot from a
+  // single held press. This was apparently missed when cubes/slabs got
+  // their own exclusion below \u2014 the ONLY thing that ever stopped that
+  // from being visible was the minSpacing distance check in addDecor()
+  // silently rejecting every one of those extra per-frame attempts
+  // (since the aim barely moves while holding). That's an accidental
+  // side effect standing in for a real fix, not a real fix \u2014 excluded
+  // here properly instead, which is what makes shrinking/removing
+  // minSpacing afterwards actually safe.
+  if (actionHeld && !(tool === 'place' && isSlabType(mainType)) && !heldPieceIsCube && editMode !== 'deko' && tool !== 'copy' && !(tool === 'remove' && removeBoxMode)) doAction();
   updateAimHint();
   renderer.render(scene, camera);
 }

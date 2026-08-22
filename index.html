@@ -113,6 +113,11 @@ try {
   #rotateBtn.ui-scalable, #copyAnchorBtn.ui-scalable, #actionBtn.ui-scalable, #keyboardLegend.ui-scalable{transform-origin:right bottom;}
   #aimHint.ui-scalable, #measureResult.ui-scalable{transform-origin:center bottom; transform:translateX(-50%) scale(var(--ui-scale, 1));}
   #levelHud.ui-scalable, #landscapeFsHint.ui-scalable{transform-origin:center top; transform:translateX(-50%) scale(var(--ui-scale, 1));}
+  /* Centred on screen, not anchored to the top edge like its siblings
+     above — its own position:top:50%;left:50% already handles the
+     centring, so the scale here needs to keep that centre fixed too,
+     not the top edge. */
+  #portraitRotateHint.ui-scalable{transform-origin:center center; transform:translate(-50%,-50%) scale(var(--ui-scale, 1));}
 
   h1,h2,h3,.display{font-family:'Fraunces', serif;}
 
@@ -951,6 +956,47 @@ try {
     background:none; border:none; color:var(--parchment-dim); font-size:14px; cursor:pointer; padding:4px 6px; line-height:1;
   }
 
+  /* Same spot as #landscapeFsHint — the two are mutually exclusive
+     (one only shows in landscape, this one only in portrait), so they
+     never need to coexist or be told apart positionally. Not
+     click-to-act like the fullscreen hint, since there's no API to
+     rotate the device for the player — just informational, with its
+     own dismiss button. */
+  /* Vertically centred on screen (not pinned to the top like the
+     fullscreen hint) — the whole rest of the HUD gets dimmed away
+     while this shows (see body.portrait-blocked below), so there's no
+     risk of it overlapping anything else, and centred reads as more
+     of a deliberate "stop, rotate first" moment than a passing toast. */
+  #portraitRotateHint{
+    position:absolute; top:50%; left:50%;
+    transform:translate(-50%,-50%); z-index:29;
+    background:rgba(32,24,15,.94); border:1px solid var(--oak-light); border-radius:24px;
+    padding:30px 34px 22px; box-shadow:var(--shadow); pointer-events:auto;
+    display:flex; flex-direction:column; align-items:center; gap:14px;
+    font-size:15px; font-weight:600; color:var(--parchment); text-align:center;
+    max-width:230px;
+  }
+  /* The icon itself IS the instruction — animated so the rotating
+     motion reads instantly, without needing to parse any wording at
+     all. Pauses briefly at each end so it clearly reads as "from here
+     to here", not just a spin. */
+  #portraitRotateIcon{
+    animation:portraitRotateSpin 2s ease-in-out infinite;
+    transform-origin:center;
+  }
+  @keyframes portraitRotateSpin{
+    0%, 15%   { transform:rotate(0deg); }
+    45%, 65%  { transform:rotate(-90deg); }
+    85%, 100% { transform:rotate(0deg); }
+  }
+  @media (prefers-reduced-motion: reduce){
+    #portraitRotateIcon{ animation:none; transform:rotate(-90deg); }
+  }
+  #portraitRotateHintCloseBtn{
+    position:absolute; top:8px; right:10px;
+    background:none; border:none; color:var(--parchment-dim); font-size:14px; cursor:pointer; padding:4px 6px; line-height:1;
+  }
+
   #madeByTag{
     position:absolute; top:calc(4px + env(safe-area-inset-top)); left:50%; z-index:14;
     transform:translateX(-50%);
@@ -1050,6 +1096,36 @@ try {
   }
   body.desktop-ui #madeByTag{font-size:11px; padding:4px 10px;}
   body.desktop-ui #madeByTag svg{width:11px; height:11px;}
+
+  /* Either the portrait-rotate hint or the landscape-fullscreen hint
+     is up (see updatePortraitRotateHint / updateLandscapeFsHint) — the
+     rest of the HUD is a distraction either way, not yet the moment
+     the player's actually ready to build, so it's dimmed out of the
+     way entirely rather than left cluttering the screen behind
+     whichever message is showing. Menu, info, and the made-by credit
+     stay reachable throughout — none of them need landscape OR
+     fullscreen to work, and hiding the credit specifically felt wrong
+     to do just because the player hasn't acted on the hint yet.
+     Listed explicitly (rather than "hide everything, then re-show a
+     few") to match this file's existing style for conditional
+     visibility above, and because the two buttons that must stay live
+     inside #topRightRow sit alongside several that must NOT, so a
+     blanket rule on the row itself can't do it. Dismissing either hint
+     (or resolving it — rotating, or actually going fullscreen) brings
+     all of this back immediately — this only ever applies while one
+     of the two hints is actually up. */
+  body.hud-blocked #leftControlCluster, body.hud-blocked #topLeftRow,
+  body.hud-blocked #typeMenuPanel, body.hud-blocked #colorPanel,
+  body.hud-blocked #dock, body.hud-blocked #rotateBtn, body.hud-blocked #copyAnchorBtn,
+  body.hud-blocked #aimHint, body.hud-blocked #measureResult, body.hud-blocked #actionBtn,
+  body.hud-blocked #keyboardLegend, body.hud-blocked #levelHud,
+  body.hud-blocked #crosshair, body.hud-blocked #lookLayer,
+  body.hud-blocked #tutorialHand, body.hud-blocked #tutorialHint,
+  body.hud-blocked #versionLabel, body.hud-blocked #achievementToast,
+  body.hud-blocked #undoBtn, body.hud-blocked #redoBtn, body.hud-blocked #achievementsBtn,
+  body.hud-blocked #fullscreenBtn, body.hud-blocked #shareBtn{
+    display:none !important;
+  }
   body.desktop-ui .modal{max-width:520px;}
   body.desktop-ui .modal h2{font-size:26px;}
   body.desktop-ui .modal .sub{font-size:14px;}
@@ -1085,7 +1161,7 @@ try {
 <div id="app">
   <canvas id="scene"></canvas>
   <div id="crosshair"></div>
-  <div id="versionLabel">v5.35</div>
+  <div id="versionLabel">v5.40</div>
   <!-- Deliberately tiny: a one-line hint pill plus a pointing hand at
        the actual target, instead of a big text box that used to eat
        into the 3D view (especially cramped on a phone screen). Buttons
@@ -1589,6 +1665,15 @@ try {
   <div id="landscapeFsHint" class="ui-scalable" style="display:none;">
     <span>📱 Tap for fullscreen</span>
     <button id="landscapeFsHintCloseBtn" title="Dismiss">✕</button>
+  </div>
+
+  <div id="portraitRotateHint" class="ui-scalable" style="display:none;">
+    <button id="portraitRotateHintCloseBtn" title="Dismiss">✕</button>
+    <svg id="portraitRotateIcon" viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+      <rect x="7" y="2" width="10" height="20" rx="2.2"/>
+      <line x1="11" y1="18.3" x2="13" y2="18.3"/>
+    </svg>
+    <span>Turn your phone sideways to build</span>
   </div>
 
   <div class="modal-bg" id="saveSlotModal" style="display:none;">
@@ -6962,11 +7047,20 @@ if (isIOS && !isStandalone) {
 // sidesteps this cleanly: tapping IT is a real gesture, so the request
 // it makes always actually succeeds wherever it's even possible.
 let landscapeFsHintDismissed = false; // reset on every fresh rotation, so dismissing it once doesn't hide it forever
+// Shared by both hints below (this one, and the portrait-rotate one
+// further down) — the rest of the HUD is dimmed away for exactly as
+// long as EITHER one is showing, and restored the moment neither is.
+function updateHudBlockedState() {
+  const landscapeVisible = document.getElementById('landscapeFsHint').style.display === 'flex';
+  const portraitVisible = document.getElementById('portraitRotateHint').style.display === 'flex';
+  document.body.classList.toggle('hud-blocked', landscapeVisible || portraitVisible);
+}
 function updateLandscapeFsHint() {
   const hint = document.getElementById('landscapeFsHint');
   const isLandscape = matchMedia('(orientation: landscape)').matches;
   const alreadyFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
   hint.style.display = (touchUI && !isIOS && isLandscape && !alreadyFullscreen && !landscapeFsHintDismissed) ? 'flex' : 'none';
+  updateHudBlockedState();
 }
 matchMedia('(orientation: landscape)').addEventListener('change', () => {
   landscapeFsHintDismissed = false;
@@ -6984,6 +7078,31 @@ document.getElementById('landscapeFsHintCloseBtn').addEventListener('click', (e)
   updateLandscapeFsHint();
 });
 updateLandscapeFsHint(); // reflect whatever orientation the page actually booted into
+
+// Mirror of the above, for the opposite orientation: BriqSite's touch
+// layout is built around landscape (that's what the fullscreen hint
+// above is for in the first place), so a phone held upright is
+// cramped enough to be worth a nudge — there's no API to rotate the
+// device for the player, so this is purely informational, dismissible
+// the same way.
+let portraitRotateHintDismissed = false; // reset on every fresh rotation, so dismissing it once doesn't hide it forever
+function updatePortraitRotateHint() {
+  const hint = document.getElementById('portraitRotateHint');
+  const isLandscape = matchMedia('(orientation: landscape)').matches;
+  const shouldShow = touchUI && !isLandscape && !portraitRotateHintDismissed;
+  hint.style.display = shouldShow ? 'flex' : 'none';
+  updateHudBlockedState();
+}
+matchMedia('(orientation: landscape)').addEventListener('change', () => {
+  portraitRotateHintDismissed = false;
+  updatePortraitRotateHint();
+});
+document.getElementById('portraitRotateHintCloseBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  portraitRotateHintDismissed = true;
+  updatePortraitRotateHint();
+});
+updatePortraitRotateHint(); // reflect whatever orientation the page actually booted into
 
 /* ---------------- Pointer aim tracking (orbit mode, and desktop fp) ---------------- */
 // The Egoperspektive normally aims from dead-centre of the screen (the
@@ -11515,14 +11634,18 @@ function animate() {
 
       // Vertical flight — lets the player rise to build upper courses and
       // roofs instead of being stuck at fixed eye height (Space/▲ up,
-      // Shift/▼ down).
+      // Shift/▼ down). Deliberately Shift-only, not Ctrl — Ctrl+W (down
+      // while also pressing forward) is the browser's own reserved
+      // "close tab" shortcut and can't be intercepted from here, so
+      // binding a movement key to Ctrl risked silently closing the tab
+      // mid-game whenever both were held at once.
       let flyDir = 0;
       if (touchUI) {
         if (flyUp) flyDir += 1;
         if (flyDown) flyDir -= 1;
       } else {
         if (keys['Space']) flyDir += 1;
-        if (keys['ShiftLeft'] || keys['ShiftRight'] || keys['ControlLeft']) flyDir -= 1;
+        if (keys['ShiftLeft'] || keys['ShiftRight']) flyDir -= 1;
       }
       playerPos.y += flyDir * FLY_SPEED * dt;
       playerPos.y = Math.max(FLY_MIN_Y, Math.min(FLY_MAX_Y, playerPos.y));
